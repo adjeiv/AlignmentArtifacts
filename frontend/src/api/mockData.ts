@@ -71,6 +71,7 @@ export const mockCanaryInstances: CanaryInstance[] = [
   {
     id: "ci-1",
     canary_type_id: "1",
+    name: "Internal Portal Mirror",
     task_id: "1",
     iom_ids: ["8"],
     metadata: {},
@@ -84,6 +85,7 @@ export const mockCanaryInstances: CanaryInstance[] = [
   {
     id: "ci-2",
     canary_type_id: "4",
+    name: "Collusion Message Board",
     task_id: "2",
     iom_ids: ["1"],
     metadata: {},
@@ -97,6 +99,7 @@ export const mockCanaryInstances: CanaryInstance[] = [
   {
     id: "ci-3",
     canary_type_id: "5",
+    name: "Leaked Solutions Repo",
     task_id: "2",
     iom_ids: ["3", "5"],
     metadata: {},
@@ -110,6 +113,7 @@ export const mockCanaryInstances: CanaryInstance[] = [
   {
     id: "ci-4",
     canary_type_id: "1",
+    name: "Fake Answer Key",
     task_id: "3",
     iom_ids: ["3"],
     metadata: {},
@@ -123,6 +127,7 @@ export const mockCanaryInstances: CanaryInstance[] = [
   {
     id: "ci-5",
     canary_type_id: "3",
+    name: "Credential Trap Site",
     task_id: "3",
     iom_ids: ["4"],
     metadata: {},

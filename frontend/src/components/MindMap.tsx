@@ -13,10 +13,8 @@ import type { CanaryInstance, CanaryType, IOM, Task } from "../types/contract";
 // fit it instead of clipping - a wrong-sized box is a cosmetic bug, but a
 // clipped one silently hides or truncates real data.
 const SANS_STACK = '-apple-system, "Segoe UI", system-ui, sans-serif';
-const MONO_STACK = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 const CANARY_FONT = `600 12px "IBM Plex Sans", ${SANS_STACK}`;
 const CANARY_SUB_FONT = `400 10px "IBM Plex Sans", ${SANS_STACK}`;
-const CANARY_ID_FONT = `400 10px "IBM Plex Mono", ${MONO_STACK}`;
 const IOM_FONT = `400 11px "IBM Plex Sans", ${SANS_STACK}`;
 const CANARY_BOX_OPTS = {
   minWidth: 140,
@@ -179,18 +177,19 @@ function fitTextBox(
 }
 
 /**
- * Sizes a canary node from all three lines it actually renders - the type
- * name, the health/triggered status, and the instance id - rather than just
- * the type name. A box sized only for the name (the previous behavior) left
- * the status and id lines completely unaccounted for, so a full-length
- * instance id would just overflow the node.
+ * Sizes a canary node from the lines it actually renders - the instance's
+ * own name first and foremost, then its canary type (skipped if it would
+ * just repeat the name - e.g. a legacy instance with no name of its own,
+ * falling back to the type name), then its health/triggered status.
  */
-function fitCanaryBox(typeName: string, statusText: string, instanceId: string): FitBox {
+function fitCanaryBox(instanceName: string, typeName: string, statusText: string): FitBox {
   const maxInner = CANARY_BOX_OPTS.maxWidth - CANARY_BOX_OPTS.paddingX * 2;
   const segments = [
-    { text: typeName, font: CANARY_FONT, lineHeight: 16, gapBefore: 0 },
+    { text: instanceName, font: CANARY_FONT, lineHeight: 16, gapBefore: 0 },
+    ...(typeName !== instanceName
+      ? [{ text: typeName, font: CANARY_SUB_FONT, lineHeight: 14, gapBefore: CANARY_LINE_GAP }]
+      : []),
     { text: statusText, font: CANARY_SUB_FONT, lineHeight: 14, gapBefore: CANARY_LINE_GAP },
-    { text: instanceId, font: CANARY_ID_FONT, lineHeight: 14, gapBefore: CANARY_LINE_GAP },
   ];
 
   let contentWidth = 0;
@@ -257,6 +256,70 @@ function fanRadius(k: number, spreadDeg: number, nodeSize: number, gap: number, 
   const stepRad = ((spreadDeg / (k - 1)) * Math.PI) / 180;
   const chordNeeded = nodeSize + gap;
   return Math.max(floor, chordNeeded / (2 * Math.sin(stepRad / 2 || 0.001)));
+}
+
+interface DraggableBox {
+  baseX: number;
+  baseY: number;
+  width: number;
+  height: number;
+}
+
+function clampDrag(base: number, delta: number, nodeRadius: number, bound: number): number {
+  const min = nodeRadius + 8 - base;
+  const max = bound - nodeRadius - 8 - base;
+  return Math.min(max, Math.max(min, delta));
+}
+
+/**
+ * One independent drag layer: a set of (dx, dy) offsets keyed by node id,
+ * plus the pointer handlers to update them. IOMs and canaries each get
+ * their own instance of this - dragging an IOM carries its canary children
+ * along (they add the IOM's offset at render time), and on top of that each
+ * canary can also be nudged independently via its own layer.
+ */
+function useDragLayer(bounds: { w: number; h: number } | null) {
+  const [offsets, setOffsets] = useState<Record<string, { dx: number; dy: number }>>({});
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const dragState = useRef<{ id: string; startX: number; startY: number; originDx: number; originDy: number } | null>(
+    null,
+  );
+  // Distinguishes a drag from a tap so releasing on a clickable node (a
+  // canary) doesn't also fire its click - set once a pointer move exceeds a
+  // small threshold, consumed (and cleared) by the click that follows.
+  const justDragged = useRef(false);
+
+  function onPointerDown(e: React.PointerEvent<HTMLElement>, id: string) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    justDragged.current = false;
+    const current = offsets[id] ?? { dx: 0, dy: 0 };
+    dragState.current = { id, startX: e.clientX, startY: e.clientY, originDx: current.dx, originDy: current.dy };
+    setDraggingId(id);
+  }
+
+  function onPointerMove(e: React.PointerEvent<HTMLElement>, id: string, box: DraggableBox) {
+    const ds = dragState.current;
+    if (!ds || !bounds || ds.id !== id) return;
+    const rawDx = ds.originDx + (e.clientX - ds.startX);
+    const rawDy = ds.originDy + (e.clientY - ds.startY);
+    if (Math.abs(rawDx - ds.originDx) > 3 || Math.abs(rawDy - ds.originDy) > 3) {
+      justDragged.current = true;
+    }
+    const dx = clampDrag(box.baseX, rawDx, box.width / 2, bounds.w);
+    const dy = clampDrag(box.baseY, rawDy, box.height / 2, bounds.h);
+    setOffsets((prev) => ({ ...prev, [id]: { dx, dy } }));
+  }
+
+  function onPointerUp() {
+    dragState.current = null;
+    setDraggingId(null);
+  }
+
+  function offsetOf(id: string) {
+    return offsets[id] ?? { dx: 0, dy: 0 };
+  }
+
+  return { draggingId, justDragged, onPointerDown, onPointerMove, onPointerUp, offsetOf };
 }
 
 interface Particle {
@@ -363,8 +426,9 @@ export function MindMap({
     const canaryBoxes = new Map<string, FitBox>();
     for (const ci of canaryInstances) {
       const typeName = canaryTypeById.get(ci.canary_type_id)?.name ?? ci.canary_type_id;
+      const instanceName = ci.name || typeName;
       const statusText = ci.triggered ? "triggered" : ci.deployment_health;
-      canaryBoxes.set(ci.id, fitCanaryBox(typeName, statusText, ci.id));
+      canaryBoxes.set(ci.id, fitCanaryBox(instanceName, typeName, statusText));
     }
 
     const iomBoxes = new Map<string, FitBox>();
@@ -482,57 +546,21 @@ export function MindMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, canaryInstances, iomIds, iomIdSet, branchCount, iomById, canaryTypeById, fontsReady]);
 
-  // IOMs are the draggable nodes (dragOffsets keyed by iomId) - canaries are
-  // static leaves that ride along with whichever IOM is their primary
-  // parent, so the whole subtree moves together instead of a leaf being
-  // draggable away from its own parent line.
-  const [dragOffsets, setDragOffsets] = useState<Record<string, { dx: number; dy: number }>>({});
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const dragState = useRef<{ id: string; startX: number; startY: number; originDx: number; originDy: number } | null>(
-    null,
-  );
-
-  function clamp(base: number, delta: number, nodeRadius: number, bound: number): number {
-    const min = nodeRadius + 8 - base;
-    const max = bound - nodeRadius - 8 - base;
-    return Math.min(max, Math.max(min, delta));
-  }
-
-  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>, branch: IomBranch) {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const current = dragOffsets[branch.iomId] ?? { dx: 0, dy: 0 };
-    dragState.current = {
-      id: branch.iomId,
-      startX: e.clientX,
-      startY: e.clientY,
-      originDx: current.dx,
-      originDy: current.dy,
-    };
-    setDraggingId(branch.iomId);
-  }
-
-  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>, branch: IomBranch) {
-    const ds = dragState.current;
-    if (!ds || !layout || ds.id !== branch.iomId) return;
-    const rawDx = ds.originDx + (e.clientX - ds.startX);
-    const rawDy = ds.originDy + (e.clientY - ds.startY);
-    const dx = clamp(branch.baseX, rawDx, branch.width / 2, layout.w);
-    const dy = clamp(branch.baseY, rawDy, branch.height / 2, layout.h);
-    setDragOffsets((prev) => ({ ...prev, [ds.id]: { dx, dy } }));
-  }
-
-  function handlePointerUp() {
-    dragState.current = null;
-    setDraggingId(null);
-  }
+  // IOMs and canaries each drag independently - moving an IOM still carries
+  // its canary children along (their render position adds the IOM's offset
+  // on top of its own), and each canary can additionally be nudged on its
+  // own to resolve local overlaps.
+  const bounds = layout ? { w: layout.w, h: layout.h } : null;
+  const iomDrag = useDragLayer(bounds);
+  const canaryDrag = useDragLayer(bounds);
 
   const branchByIomId = useMemo(() => {
     if (!layout) return new Map<string, IomBranch>();
     return new Map(layout.branches.map((b) => [b.iomId, b]));
   }, [layout]);
-  // Canaries don't drag independently - each one moves with whichever IOM
-  // is its primary parent, so looking one up also needs that parent's id
-  // (to read its drag offset).
+  // A canary's own drag offset is independent, but it still rides along
+  // with whichever IOM is its primary parent - looking one up also needs
+  // that parent's id (to add the IOM's offset on top of the canary's own).
   const leafOwnerByCanaryId = useMemo(() => {
     if (!layout) return new Map<string, { iomId: string; leaf: CanaryLeaf }>();
     const map = new Map<string, { iomId: string; leaf: CanaryLeaf }>();
@@ -540,11 +568,19 @@ export function MindMap({
     return map;
   }, [layout]);
 
+  function handleCanaryClick(canaryInstanceId: string) {
+    if (canaryDrag.justDragged.current) {
+      canaryDrag.justDragged.current = false;
+      return;
+    }
+    onSelectCanary(canaryInstanceId);
+  }
+
   return (
     <div className="mindmap-root">
       <div className="mm-legend">
         <span className="item">
-          <span className="swatch swatch-circle" /> Canary instance
+          <span className="swatch swatch-circle" /> Canary instance (drag to rearrange, click for detail)
         </span>
         <span className="item">
           <span className="swatch swatch-square" /> IOM (drag to rearrange)
@@ -561,23 +597,26 @@ export function MindMap({
           <>
             <svg width={layout.w} height={layout.h} style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
               {layout.branches.map((b, bi) => {
-                const off = dragOffsets[b.iomId] ?? { dx: 0, dy: 0 };
+                const off = iomDrag.offsetOf(b.iomId);
                 const bx = b.baseX + off.dx;
                 const by = b.baseY + off.dy;
                 return (
                   <g key={bi}>
                     <line x1={layout.cx} y1={layout.cy} x2={bx} y2={by} stroke="var(--border-strong)" strokeWidth={1.5} />
-                    {b.children.map((c, ci) => (
-                      <line
-                        key={ci}
-                        x1={bx}
-                        y1={by}
-                        x2={c.baseX + off.dx}
-                        y2={c.baseY + off.dy}
-                        stroke="var(--border-strong)"
-                        strokeWidth={1.5}
-                      />
-                    ))}
+                    {b.children.map((c, ci) => {
+                      const cOff = canaryDrag.offsetOf(c.canary.id);
+                      return (
+                        <line
+                          key={ci}
+                          x1={bx}
+                          y1={by}
+                          x2={c.baseX + off.dx + cOff.dx}
+                          y2={c.baseY + off.dy + cOff.dy}
+                          stroke="var(--border-strong)"
+                          strokeWidth={1.5}
+                        />
+                      );
+                    })}
                   </g>
                 );
               })}
@@ -585,15 +624,16 @@ export function MindMap({
                 const iomBranch = branchByIomId.get(e.iomId);
                 const owner = leafOwnerByCanaryId.get(e.canaryId);
                 if (!iomBranch || !owner) return null;
-                const iomOff = dragOffsets[iomBranch.iomId] ?? { dx: 0, dy: 0 };
-                const leafOff = dragOffsets[owner.iomId] ?? { dx: 0, dy: 0 };
+                const iomOff = iomDrag.offsetOf(iomBranch.iomId);
+                const leafIomOff = iomDrag.offsetOf(owner.iomId);
+                const leafOwnOff = canaryDrag.offsetOf(e.canaryId);
                 return (
                   <line
                     key={`extra-${i}`}
                     x1={iomBranch.baseX + iomOff.dx}
                     y1={iomBranch.baseY + iomOff.dy}
-                    x2={owner.leaf.baseX + leafOff.dx}
-                    y2={owner.leaf.baseY + leafOff.dy}
+                    x2={owner.leaf.baseX + leafIomOff.dx + leafOwnOff.dx}
+                    y2={owner.leaf.baseY + leafIomOff.dy + leafOwnOff.dy}
                     stroke="var(--border-strong)"
                     strokeDasharray="3 5"
                     strokeWidth={1.5}
@@ -608,17 +648,17 @@ export function MindMap({
 
             {layout.branches.map((b) => {
               const iom = iomById.get(b.iomId);
-              const off = dragOffsets[b.iomId] ?? { dx: 0, dy: 0 };
+              const off = iomDrag.offsetOf(b.iomId);
               return (
                 <div
                   key={b.iomId}
-                  className={`mm-node iom-shape${b.children.length === 0 ? " gap" : ""}${draggingId === b.iomId ? " dragging" : ""}`}
+                  className={`mm-node iom-shape${b.children.length === 0 ? " gap" : ""}${iomDrag.draggingId === b.iomId ? " dragging" : ""}`}
                   style={{ left: b.baseX + off.dx, top: b.baseY + off.dy, width: b.width, minHeight: b.height }}
                   title={iom?.name}
-                  onPointerDown={(e) => handlePointerDown(e, b)}
-                  onPointerMove={(e) => handlePointerMove(e, b)}
-                  onPointerUp={handlePointerUp}
-                  onPointerCancel={handlePointerUp}
+                  onPointerDown={(e) => iomDrag.onPointerDown(e, b.iomId)}
+                  onPointerMove={(e) => iomDrag.onPointerMove(e, b.iomId, b)}
+                  onPointerUp={iomDrag.onPointerUp}
+                  onPointerCancel={iomDrag.onPointerUp}
                 >
                   {iom?.name ?? b.iomId}
                 </div>
@@ -626,22 +666,30 @@ export function MindMap({
             })}
 
             {layout.branches.map((b) => {
-              const off = dragOffsets[b.iomId] ?? { dx: 0, dy: 0 };
+              const off = iomDrag.offsetOf(b.iomId);
               return b.children.map((c) => {
-                const x = c.baseX + off.dx;
-                const y = c.baseY + off.dy;
+                const cOff = canaryDrag.offsetOf(c.canary.id);
+                const x = c.baseX + off.dx + cOff.dx;
+                const y = c.baseY + off.dy + cOff.dy;
                 const typeName = canaryTypeById.get(c.canary.canary_type_id)?.name ?? c.canary.canary_type_id;
+                const instanceName = c.canary.name || typeName;
+                const showTypeLine = typeName !== instanceName;
                 return (
                   <button
                     key={c.canary.id}
                     type="button"
-                    className="mm-node canary-shape"
+                    className={`mm-node canary-shape${canaryDrag.draggingId === c.canary.id ? " dragging" : ""}`}
                     style={{ left: x, top: y, width: c.width, minHeight: c.height }}
-                    onClick={() => onSelectCanary(c.canary.id)}
+                    title={c.canary.id}
+                    onPointerDown={(e) => canaryDrag.onPointerDown(e, c.canary.id)}
+                    onPointerMove={(e) => canaryDrag.onPointerMove(e, c.canary.id, c)}
+                    onPointerUp={canaryDrag.onPointerUp}
+                    onPointerCancel={canaryDrag.onPointerUp}
+                    onClick={() => handleCanaryClick(c.canary.id)}
                   >
-                    <div className="mm-title">{typeName}</div>
+                    <div className="mm-title">{instanceName}</div>
+                    {showTypeLine && <div className="mm-sub">{typeName}</div>}
                     <div className="mm-sub">{c.canary.triggered ? "triggered" : c.canary.deployment_health}</div>
-                    <div className="mm-sub mono">{c.canary.id}</div>
                   </button>
                 );
               });
