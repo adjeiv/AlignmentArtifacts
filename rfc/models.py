@@ -35,6 +35,7 @@ class IOM:
 @dataclass
 class CanaryType:
     id: str
+    name: str
 
 
 @dataclass
