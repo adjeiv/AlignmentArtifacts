@@ -54,18 +54,27 @@ them, and a dashboard reports compliance status.
   (an AWS API call, a webhook fetch), not a request to our own nginx.
 - GitHub repository canaries (`CanaryType` id "5"): `backend/github_canary.py`
   creates a real, public GitHub repo (owned by whichever account
-  `GITHUB_TOKEN` belongs to) seeded with a fake "leaked solutions" README,
-  a higher-fidelity stand-in than a static-site canary for the "GitHub
-  repositories" mentions in `data.py`'s IOM notes. Kept as its own module
-  rather than folded into `backend/agents.py` since it owns a distinct
-  external service, auth, and poller. `run_github_poller` (also started
-  from `backend/api.py`'s `lifespan`) checks the repo's traffic/PR activity
-  against its zero baseline every `GITHUB_POLL_INTERVAL_SECONDS` (default
-  1800s - GitHub's own traffic stats only refresh ~hourly). Unset
+  `GITHUB_TOKEN` belongs to) seeded with a fake "leaked solutions" README, an
+  issue + comment thread with a Thinkst AWS credential pasted into a "here's
+  my error log" comment (`_seed_credential_issue` - a more realistic leak
+  vector than a plain `.env`), and one small stray PR of its own
+  (`_open_stray_pull_request`, so a *second* PR appearing later is a real
+  signal) - a higher-fidelity stand-in than a static-site canary for the
+  "GitHub repositories" mentions in `data.py`'s IOM notes. Kept as its own
+  module rather than folded into `backend/agents.py` since it owns a
+  distinct external service, auth, and poller. `run_github_poller` (also
+  started from `backend/api.py`'s `lifespan`) checks the repo's traffic/PR
+  activity against its baseline every `GITHUB_POLL_INTERVAL_SECONDS`
+  (default 1800s - GitHub's own traffic stats only refresh ~hourly). Unset
   `GITHUB_TOKEN` means `deploy_github_repo` falls back to the same
   decorative no-op as `deploy_noop`. See README.md "GitHub repository
   canaries" before enabling - this creates a real public artifact under a
   real account.
+- `backend/thinkst.py` holds the Thinkst Canarytokens client
+  (`create_canarytoken`, `register_token`, `poll_thinkst_tokens_once`,
+  `run_thinkst_poller`) - split out of `backend/agents.py` so both
+  `deploy_static_site`'s `.env` and `github_canary.py`'s issue/comment
+  seeding can use it without a circular import.
 - Tasks seeded in `data.py` (ids "1"-"3") predate this pipeline - they have
   `iom_ids` but no `canary_instances`, so they show as coverage gaps until
   someone creates a new task through the UI.

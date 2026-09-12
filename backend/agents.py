@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-import requests
 from pydantic import BaseModel, ConfigDict
 
 import data
 from backend.github_canary import build_github_repo_prompt, deploy_github_repo
 from backend.models import CanaryEvent, CanaryInstance, CanaryType, DeploymentHealth, IOM, LogLevel, Task
+from backend.thinkst import create_canarytoken, register_token
 
 MODEL = "claude-sonnet-5"
 
@@ -412,23 +412,9 @@ def trigger_canary_instance(instance: CanaryInstance, iom_id: str) -> None:
 
 
 # --- Thinkst Canarytokens: real, third-party-monitored credentials --------
-#
-# log-monitor/ only catches *inbound* hits on our own nginx. A leaked AWS key
-# or webhook URL is used *outbound* - against AWS's real API, or by fetching
-# a URL Thinkst controls - so detecting that needs a different mechanism:
-# canarytokens.org (Thinkst's free hosted service, see
-# https://github.com/thinkst/canarytokens) issues real monitored credentials
-# via a public API, and poll_thinkst_tokens_once (started from backend/api.py
-# at startup) periodically asks it whether any have fired.
-#
-# Opt-in: THINKST_ALERT_EMAIL must be set (some email you actually control -
-# Thinkst requires an email or webhook per token, even though we only ever
-# poll /history ourselves and never rely on that channel firing). Unset means
-# this whole feature quietly no-ops, same as deploy_noop's "nothing real
-# configured yet" default elsewhere in this file.
-THINKST_BASE_URL = os.environ.get("THINKST_BASE_URL", "https://canarytokens.org")
-THINKST_ALERT_EMAIL = os.environ.get("THINKST_ALERT_EMAIL")
-THINKST_POLL_INTERVAL_SECONDS = int(os.environ.get("THINKST_POLL_INTERVAL_SECONDS", "30"))
+# See backend/thinkst.py - moved there since backend/github_canary.py also
+# plants Thinkst credentials (in issues/comments) and can't import from
+# here without a circular import.
 
 # aws_keys: a clean AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY pair, fires on any
 #   AWS API call made with it (even a harmless one like sts:GetCallerIdentity).
@@ -437,27 +423,6 @@ THINKST_POLL_INTERVAL_SECONDS = int(os.environ.get("THINKST_POLL_INTERVAL_SECOND
 # (Slack/MySQL tokens exist too, but need an extra /download call or don't
 # map cleanly onto a single .env line - left for a follow-up.)
 _THINKST_ENV_TOKEN_KINDS = ("aws_keys", "web")
-
-_thinkst_tokens: list[dict[str, Any]] = []
-_thinkst_tokens_lock = asyncio.Lock()
-
-
-def _create_canarytoken(kind: str, memo: str) -> dict[str, Any] | None:
-    if not THINKST_ALERT_EMAIL:
-        return None
-    try:
-        resp = requests.post(
-            f"{THINKST_BASE_URL}/generate",
-            json={"token_type": kind, "memo": memo, "email": THINKST_ALERT_EMAIL},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        token_response = resp.json()
-    except requests.RequestException:
-        return None
-    if token_response.get("error"):
-        return None
-    return token_response
 
 
 def _fake_env_lines(instance: CanaryInstance, task: Task) -> tuple[list[str], list[dict[str, Any]]]:
@@ -471,7 +436,7 @@ def _fake_env_lines(instance: CanaryInstance, task: Task) -> tuple[list[str], li
     lines = ["# .env", "APP_ENV=production", "DEBUG=false"]
     tokens: list[dict[str, Any]] = []
 
-    aws = _create_canarytoken("aws_keys", memo)
+    aws = create_canarytoken("aws_keys", memo)
     if aws:
         lines += [
             "",
@@ -482,7 +447,7 @@ def _fake_env_lines(instance: CanaryInstance, task: Task) -> tuple[list[str], li
         ]
         tokens.append({"token": aws["token"], "auth": aws["auth_token"]})
 
-    web = _create_canarytoken("web", memo)
+    web = create_canarytoken("web", memo)
     if web:
         lines += [
             "",
@@ -496,7 +461,7 @@ def _fake_env_lines(instance: CanaryInstance, task: Task) -> tuple[list[str], li
 
 async def _plant_fake_env(instance: CanaryInstance, task: Task, site_dir: Path) -> bool:
     """Writes a .env file into a deployed canary's directory if Thinkst is
-    configured, and registers its tokens for poll_thinkst_tokens_once.
+    configured, and registers its tokens for backend.thinkst's poller.
     Returns whether anything was actually planted (best-effort: a Thinkst
     API hiccup just means no .env this time, not a failed deploy)."""
     if not instance.iom_ids:
@@ -507,48 +472,9 @@ async def _plant_fake_env(instance: CanaryInstance, task: Task, site_dir: Path) 
 
     await asyncio.to_thread((site_dir / ".env").write_text, "\n".join(lines) + "\n")
 
-    async with _thinkst_tokens_lock:
-        for token in tokens:
-            _thinkst_tokens.append(
-                {**token, "instance_id": instance.id, "iom_id": instance.iom_ids[0], "reported": False}
-            )
+    for token in tokens:
+        await register_token(token["token"], token["auth"], instance.id, instance.iom_ids[0])
     return True
-
-
-def _check_thinkst_history(token: str, auth: str) -> bool:
-    try:
-        resp = requests.get(
-            f"{THINKST_BASE_URL}/history", params={"token": token, "auth": auth}, timeout=10
-        )
-        resp.raise_for_status()
-        return bool(resp.json().get("history", {}).get("hits"))
-    except requests.RequestException:
-        return False
-
-
-async def poll_thinkst_tokens_once(canary_instances: list[CanaryInstance]) -> None:
-    """Checks every not-yet-reported Thinkst token's /history for a hit
-    (credential actually used, not just planted) and triggers its canary
-    instance if so. Called on a loop from backend/api.py's app lifespan."""
-    async with _thinkst_tokens_lock:
-        pending = [t for t in _thinkst_tokens if not t["reported"]]
-
-    for entry in pending:
-        fired = await asyncio.to_thread(_check_thinkst_history, entry["token"], entry["auth"])
-        if not fired:
-            continue
-        instance = next((ci for ci in canary_instances if ci.id == entry["instance_id"]), None)
-        if instance is not None:
-            trigger_canary_instance(instance, entry["iom_id"])
-        entry["reported"] = True
-
-
-async def run_thinkst_poller(canary_instances: list[CanaryInstance]) -> None:
-    if not THINKST_ALERT_EMAIL:
-        return
-    while True:
-        await asyncio.sleep(THINKST_POLL_INTERVAL_SECONDS)
-        await poll_thinkst_tokens_once(canary_instances)
 
 
 async def deploy_static_site(instance: CanaryInstance, artifact: str, task: Task) -> None:

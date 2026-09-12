@@ -153,12 +153,23 @@ land in that inbox too when a token fires.
 ### GitHub repository canaries
 
 The "GitHub repository" canary type (`CanaryType` id "5") creates a real,
-public GitHub repo seeded with a fake "leaked solutions" README, owned by
-whichever account `GITHUB_TOKEN` belongs to - see `backend/github_canary.py`.
-`run_github_poller` checks the repo's clone/view traffic and pull requests
-against its baseline (zero, since it's freshly created) every
-`GITHUB_POLL_INTERVAL_SECONDS` (default 1800s) and triggers the canary the
-same way a `log-monitor`/Thinkst hit does.
+public GitHub repo owned by whichever account `GITHUB_TOKEN` belongs to -
+see `backend/github_canary.py`. It seeds three things:
+
+- a fake "leaked solutions" README (the LLM-generated artifact, same as
+  every other canary type),
+- an issue + comment thread where a real Thinkst AWS credential gets pasted
+  into a "here's my error log, can someone help debug" comment - closer to
+  how credentials actually leak than a plain `.env` file (needs
+  `THINKST_ALERT_EMAIL` set too; skipped otherwise),
+- one small stray pull request of its own, so a *second* PR appearing later
+  is a genuine signal rather than every repo starting with zero.
+
+`run_github_poller` checks the repo's clone/view traffic and PR count
+against that baseline every `GITHUB_POLL_INTERVAL_SECONDS` (default 1800s)
+and triggers the canary the same way a `log-monitor`/Thinkst hit does; the
+planted credential is separately caught by Thinkst's own poller the moment
+it's actually used, same as the `.env` version.
 
 **This is opt-in and creates a real public artifact under a real GitHub
 account** - unlike the local `.canary.test` domains and Thinkst's anonymous

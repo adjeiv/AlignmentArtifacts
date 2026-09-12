@@ -16,11 +16,11 @@ from backend.models import CanaryInstance, ComplianceStatus
 from backend.agents import (
     classify_task_ioms,
     deploy_canary_instance,
-    run_thinkst_poller,
     spawn_canary_instances_for_task,
 )
 from backend.agents import trigger_canary_instance as _trigger_canary_instance
 from backend.github_canary import run_github_poller
+from backend.thinkst import run_thinkst_poller
 
 
 @asynccontextmanager
@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     # GITHUB_TOKEN) - each polls a different third-party service for signs a
     # planted credential/repo was actually used, a detection path
     # log-monitor/ can't cover since that activity never touches our nginx.
-    thinkst_poller = asyncio.create_task(run_thinkst_poller(data.canary_instances))
+    thinkst_poller = asyncio.create_task(run_thinkst_poller(data.canary_instances, _trigger_canary_instance))
     github_poller = asyncio.create_task(run_github_poller(data.canary_instances, _trigger_canary_instance))
     yield
     thinkst_poller.cancel()

@@ -18,12 +18,10 @@ from backend.agents import (
     IomMapping,
     _canary_domain,
     _canary_endpoint_regex,
-    _create_canarytoken,
     classify_task_ioms,
     deploy_canary_instance,
     deploy_static_site,
     get_canary_type_handler,
-    poll_thinkst_tokens_once,
     run_claude,
     spawn_canary_instances_for_task,
     trigger_canary_instance,
@@ -283,32 +281,9 @@ def test_trigger_canary_instance_rejects_iom_not_covered():
         trigger_canary_instance(instance, "not-covered")
 
 
-# --- Thinkst Canarytokens integration ---------------------------------------
-
-
-def test_create_canarytoken_noops_when_email_not_configured(monkeypatch):
-    monkeypatch.setattr("backend.agents.THINKST_ALERT_EMAIL", None)
-    with patch("requests.post") as mock_post:
-        assert _create_canarytoken("aws_keys", "memo") is None
-    mock_post.assert_not_called()
-
-
-def test_create_canarytoken_posts_generate_request(monkeypatch):
-    monkeypatch.setattr("backend.agents.THINKST_ALERT_EMAIL", "test@example.com")
-    fake_response = MagicMock()
-    fake_response.json.return_value = {
-        "token": "tok123",
-        "auth_token": "auth123",
-        "aws_access_key_id": "AKIAFAKE",
-        "aws_secret_access_key": "fakesecret",
-        "region": "us-east-1",
-    }
-    with patch("requests.post", return_value=fake_response) as mock_post:
-        result = _create_canarytoken("aws_keys", "some memo")
-
-    assert result["aws_access_key_id"] == "AKIAFAKE"
-    kwargs = mock_post.call_args.kwargs
-    assert kwargs["json"] == {"token_type": "aws_keys", "memo": "some memo", "email": "test@example.com"}
+# --- Thinkst Canarytokens integration (create_canarytoken / poller tests
+# live in tests/test_thinkst.py now that backend/thinkst.py owns them - this
+# just covers deploy_static_site's own use of that module) ------------------
 
 
 def test_deploy_static_site_plants_env_and_registers_env_endpoint(tmp_path, monkeypatch):
@@ -317,8 +292,8 @@ def test_deploy_static_site_plants_env_and_registers_env_endpoint(tmp_path, monk
     monkeypatch.setattr("backend.agents.DNS_ZONES_FILE", tmp_path / "zones.json")
     monkeypatch.setattr("backend.agents.ENDPOINTS_FILE", tmp_path / "endpoints.json")
     monkeypatch.setattr("backend.agents.STATIC_SITE_IP", "127.0.0.1")
-    monkeypatch.setattr("backend.agents.THINKST_ALERT_EMAIL", "test@example.com")
-    monkeypatch.setattr("backend.agents._thinkst_tokens", [])
+    monkeypatch.setattr("backend.thinkst.THINKST_ALERT_EMAIL", "test@example.com")
+    monkeypatch.setattr("backend.thinkst._thinkst_tokens", [])
 
     aws_response = MagicMock()
     aws_response.json.return_value = {
@@ -350,22 +325,6 @@ def test_deploy_static_site_plants_env_and_registers_env_endpoint(tmp_path, monk
     endpoints = json.loads((tmp_path / "endpoints.json").read_text())[domain]["endpoints"]
     assert {"iom_id": "1", "path_regex": r"^/\.env$"} in endpoints
 
-    from backend.agents import _thinkst_tokens
+    from backend.thinkst import _thinkst_tokens
 
     assert {"token": "tok-aws", "auth": "auth-aws", "instance_id": instance.id, "iom_id": "1", "reported": False} in _thinkst_tokens
-
-
-def test_poll_thinkst_tokens_once_triggers_on_a_hit(monkeypatch):
-    instance = CanaryInstance(id="ci-thinkst", canary_type_id="1", task_id="1", iom_ids=["4"])
-    entry = {"token": "tok", "auth": "auth", "instance_id": "ci-thinkst", "iom_id": "4", "reported": False}
-    monkeypatch.setattr("backend.agents._thinkst_tokens", [entry])
-
-    fired_response = MagicMock()
-    fired_response.json.return_value = {"history": {"hits": [{"time_of_hit": 123}]}}
-
-    with patch("requests.get", return_value=fired_response):
-        asyncio.run(poll_thinkst_tokens_once([instance]))
-
-    assert instance.triggered is True
-    assert instance.triggered_iom_id == "4"
-    assert entry["reported"] is True
