@@ -6,12 +6,13 @@ and backend/models.py.
 
 import asyncio
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
 import data
-from backend.models import CanaryInstance, ComplianceStatus
+from backend.models import CanaryEvent, CanaryInstance, ComplianceStatus, LogLevel
 from backend.agents import classify_task_ioms, deploy_canary_instance, spawn_canary_instances_for_task
 
 app = FastAPI(title="Alignment Artifacts API")
@@ -181,6 +182,39 @@ def list_canary_instance_events(canary_instance_id: str) -> list[data.CanaryEven
         e for e in data.canary_events if e.canary_instance_id == canary_instance_id
     ]
     return sorted(events, key=lambda e: e.timestamp, reverse=True)
+
+
+@app.post("/api/canary-instances/{canary_instance_id}/trigger/{iom_id}")
+def trigger_canary_instance(canary_instance_id: str, iom_id: str) -> CanaryInstance:
+    """Called by log-monitor/monitor.py when a request matches one of this
+    instance's registered endpoint regexes (see backend/agents.py's
+    _register_endpoints). Flips triggered/triggered_iom_id and logs a TRIGGER
+    CanaryEvent - Company.compliance_status is computed live from these on
+    every read (_compliance_status_for below), so nothing else needs to be
+    told about the hit."""
+    instance = _canary_instance_or_404(canary_instance_id)
+    if iom_id not in instance.iom_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"IOM {iom_id!r} is not covered by canary instance {canary_instance_id!r}",
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    instance.triggered = True
+    instance.triggered_iom_id = iom_id
+    instance.last_heartbeat_at = now
+
+    data.canary_events.append(
+        CanaryEvent(
+            id=str(uuid.uuid4()),
+            canary_instance_id=instance.id,
+            timestamp=now,
+            level=LogLevel.TRIGGER.value,
+            message=f"Canary endpoint hit - IOM {iom_id!r} detected",
+            iom_id=iom_id,
+        )
+    )
+    return instance
 
 
 # --- Reference data --------------------------------------------------------

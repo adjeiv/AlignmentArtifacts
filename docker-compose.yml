@@ -4,23 +4,48 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set}
       STATIC_SITE_CONTENT_DIR: /canary-content
-      STATIC_SITE_DOMAIN: localhost
+      STATIC_SITE_IP: 127.0.0.1
+      DNS_ZONES_FILE: /dns-zones/zones.json
+      ENDPOINTS_FILE: /canary-endpoints/endpoints.json
     volumes:
       - canary-content:/canary-content
+      - dns-zones:/dns-zones
+      - canary-endpoints:/canary-endpoints
     ports:
       - "8000:8000"
 
   static-site:
     build: ./static-site
-    environment:
-      DOMAIN: localhost
     volumes:
       - canary-content:/srv
+      - ./pki/out:/etc/nginx/certs:ro
+      - access-logs:/var/log/nginx
     ports:
       - "80:80"
       - "443:443"
+
+  log-monitor:
+    build: ./log-monitor
+    environment:
+      ACCESS_LOG: /logs/canary_access.log
+      ENDPOINTS_FILE: /data/endpoints.json
+      BACKEND_ORIGIN: http://backend:8000
+    volumes:
+      - access-logs:/logs:ro
+      - canary-endpoints:/data:ro
+    depends_on:
+      - backend
+      - static-site
+
+  dns-resolver:
+    build: ./dns-resolver
+    environment:
+      DNS_ZONES_FILE: /data/zones.json
+    volumes:
+      - dns-zones:/data
+    ports:
+      - "127.0.0.1:53:53/udp"
 
   frontend:
     build:
@@ -36,3 +61,6 @@ services:
 
 volumes:
   canary-content:
+  dns-zones:
+  canary-endpoints:
+  access-logs:

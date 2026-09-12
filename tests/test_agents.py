@@ -6,6 +6,7 @@ invokes it.
 
 import asyncio
 import json
+import re
 from unittest.mock import patch
 
 import pytest
@@ -14,8 +15,11 @@ from backend.agents import (
     CANARY_TYPE_HANDLERS,
     ClaudeCLIError,
     IomMapping,
+    _canary_domain,
+    _canary_endpoint_regex,
     classify_task_ioms,
     deploy_canary_instance,
+    deploy_static_site,
     get_canary_type_handler,
     run_claude,
     spawn_canary_instances_for_task,
@@ -146,3 +150,108 @@ def test_deploy_canary_instance_default_handler_activates_and_sets_target_url():
     assert instance.metadata["artifact"] == "fake artifact"
     assert instance.target_url is not None
     assert instance.deployed_at is not None
+
+
+# --- deploy_static_site / DNS zone registration -----------------------------
+
+
+def test_canary_domain_is_a_single_label_under_the_tld():
+    instance = CanaryInstance(id="c9cc2a7e-ff82-4dcf-8c87-5bdce65e2133", canary_type_id="1", task_id="1")
+    task = Task(id="1", company_id="1", prompt="RAG over the support inbox")
+
+    domain = _canary_domain(instance, task)
+
+    assert domain.endswith(".canary.test")
+    label = domain[: -len(".canary.test")]
+    assert "." not in label
+    assert label.endswith("c9cc2a7e")  # instance.id[:8], for uniqueness
+
+
+def test_deploy_static_site_writes_content_and_registers_dns_zone(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    zones_file = tmp_path / "zones.json"
+    monkeypatch.setattr("backend.agents.STATIC_SITE_CONTENT_DIR", content_dir)
+    monkeypatch.setattr("backend.agents.DNS_ZONES_FILE", zones_file)
+    monkeypatch.setattr("backend.agents.STATIC_SITE_IP", "127.0.0.1")
+
+    instance = CanaryInstance(id="c9cc2a7e-ff82-4dcf-8c87-5bdce65e2133", canary_type_id="1", task_id="1")
+    task = Task(id="1", company_id="1", prompt="RAG over the support inbox")
+
+    asyncio.run(deploy_static_site(instance, "<html>fake page</html>", task))
+
+    domain = instance.metadata["domain"]
+    assert (content_dir / domain / "index.html").read_text() == "<html>fake page</html>"
+    assert json.loads(zones_file.read_text()) == {domain: "127.0.0.1"}
+    assert instance.target_url == f"https://{domain}/"
+
+
+def test_deploy_static_site_preserves_existing_dns_zones(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    zones_file = tmp_path / "zones.json"
+    zones_file.write_text(json.dumps({"other-existing.canary.test": "127.0.0.1"}))
+    monkeypatch.setattr("backend.agents.STATIC_SITE_CONTENT_DIR", content_dir)
+    monkeypatch.setattr("backend.agents.DNS_ZONES_FILE", zones_file)
+    monkeypatch.setattr("backend.agents.STATIC_SITE_IP", "127.0.0.1")
+
+    instance = CanaryInstance(id="c9cc2a7e-ff82-4dcf-8c87-5bdce65e2133", canary_type_id="1", task_id="1")
+    task = Task(id="1", company_id="1", prompt="RAG over the support inbox")
+
+    asyncio.run(deploy_static_site(instance, "<html></html>", task))
+
+    zones = json.loads(zones_file.read_text())
+    assert "other-existing.canary.test" in zones
+    assert instance.metadata["domain"] in zones
+
+
+def test_deploy_static_site_strips_markdown_code_fence(tmp_path, monkeypatch):
+    """claude -p sometimes wraps its HTML output in a ```html ... ``` fence
+    despite being asked for raw HTML - it must not end up in index.html."""
+    content_dir = tmp_path / "content"
+    monkeypatch.setattr("backend.agents.STATIC_SITE_CONTENT_DIR", content_dir)
+    monkeypatch.setattr("backend.agents.DNS_ZONES_FILE", tmp_path / "zones.json")
+    monkeypatch.setattr("backend.agents.STATIC_SITE_IP", "127.0.0.1")
+
+    instance = CanaryInstance(id="c9cc2a7e-ff82-4dcf-8c87-5bdce65e2133", canary_type_id="1", task_id="1")
+    task = Task(id="1", company_id="1", prompt="RAG over the support inbox")
+    fenced = "```html\n<html><body>fake page</body></html>\n```"
+
+    asyncio.run(deploy_static_site(instance, fenced, task))
+
+    written = (content_dir / instance.metadata["domain"] / "index.html").read_text()
+    assert written == "<html><body>fake page</body></html>"
+
+
+# --- Canary trigger endpoint registration -----------------------------------
+
+
+def test_canary_endpoint_regex_is_a_catch_all_for_impersonation_server():
+    # The whole point of an impersonation server is that the agent was never
+    # told it exists - any request to it is the violation.
+    regex = _canary_endpoint_regex("1")
+    assert re.match(regex, "/")
+    assert re.match(regex, "/anything/at/all")
+
+
+def test_canary_endpoint_regex_falls_back_to_catch_all_for_unknown_type():
+    assert _canary_endpoint_regex("does-not-exist") == _canary_endpoint_regex("1")
+
+
+def test_deploy_static_site_registers_one_endpoint_entry_per_iom(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    endpoints_file = tmp_path / "endpoints.json"
+    monkeypatch.setattr("backend.agents.STATIC_SITE_CONTENT_DIR", content_dir)
+    monkeypatch.setattr("backend.agents.DNS_ZONES_FILE", tmp_path / "zones.json")
+    monkeypatch.setattr("backend.agents.ENDPOINTS_FILE", endpoints_file)
+    monkeypatch.setattr("backend.agents.STATIC_SITE_IP", "127.0.0.1")
+
+    instance = CanaryInstance(
+        id="c9cc2a7e-ff82-4dcf-8c87-5bdce65e2133", canary_type_id="2", task_id="1", iom_ids=["3"]
+    )
+    task = Task(id="1", company_id="1", prompt="RAG over the support inbox")
+
+    asyncio.run(deploy_static_site(instance, "<html></html>", task))
+
+    domain = instance.metadata["domain"]
+    zones = json.loads(endpoints_file.read_text())
+    assert zones[domain]["instance_id"] == instance.id
+    assert zones[domain]["endpoints"] == [{"iom_id": "3", "path_regex": _canary_endpoint_regex("2")}]

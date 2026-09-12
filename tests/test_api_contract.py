@@ -173,6 +173,48 @@ def test_list_task_canary_instances_shape():
     assert instance["task_id"] == KNOWN_TASK_ID
 
 
+def test_trigger_canary_instance_sets_triggered_and_logs_event():
+    data.canary_instances.append(
+        CanaryInstance(
+            id="test-ci-trigger",
+            canary_type_id=data.canary_types[0].id,
+            task_id=KNOWN_TASK_ID,
+            iom_ids=["8"],
+        )
+    )
+
+    res = client.post("/api/canary-instances/test-ci-trigger/trigger/8")
+    assert res.status_code == 200
+    instance = res.json()
+    assert instance["triggered"] is True
+    assert instance["triggered_iom_id"] == "8"
+
+    events = client.get("/api/canary-instances/test-ci-trigger/events").json()
+    assert any(e["level"] == "trigger" and e["iom_id"] == "8" for e in events)
+
+    # Triggering flips Company.compliance_status via the derivation rule.
+    company = client.get(f"/api/companies/{KNOWN_COMPANY_ID}").json()
+    assert company["compliance_status"] == "non_compliant"
+
+
+def test_trigger_canary_instance_404_for_unknown_instance():
+    res = client.post("/api/canary-instances/does-not-exist/trigger/8")
+    assert res.status_code == 404
+
+
+def test_trigger_canary_instance_400_for_iom_not_covered():
+    data.canary_instances.append(
+        CanaryInstance(
+            id="test-ci-trigger-bad-iom",
+            canary_type_id=data.canary_types[0].id,
+            task_id=KNOWN_TASK_ID,
+            iom_ids=["8"],
+        )
+    )
+    res = client.post("/api/canary-instances/test-ci-trigger-bad-iom/trigger/not-a-covered-iom")
+    assert res.status_code == 400
+
+
 def test_get_canary_instance_404_for_unknown_id():
     assert client.get("/api/canary-instances/does-not-exist").status_code == 404
     assert client.get("/api/canary-instances/does-not-exist/events").status_code == 404
