@@ -162,38 +162,61 @@ land in that inbox too when a token fires.
 
 ### GitHub repository canaries
 
-The "GitHub repository" canary type (`CanaryType` id "5") creates a real,
-public GitHub repo owned by whichever account `GITHUB_TOKEN` belongs to -
-see `backend/github_canary.py`. It seeds three things:
+The "GitHub repository" canary type (`CanaryType` id "5") writes into ONE
+real, public, **operator-created** GitHub repo - every canary instance gets
+its own folder (`canaries/<slug>-<id>/README.md`) in that shared repo,
+rather than a fresh repo per instance. See `backend/github_canary.py` for
+why: it lets `GITHUB_TOKEN` be a **fine-grained PAT scoped to just that one
+repo** (Contents, Issues, Pull requests: read & write) instead of a
+classic, repo-creating token with much broader access.
 
-- a fake "leaked solutions" README (the LLM-generated artifact, same as
-  every other canary type),
+Setup (one-time, manual):
+
+1. Create a public repo by hand on GitHub (under a dedicated bot/throwaway
+   account, not your own - see below).
+2. Create a fine-grained PAT scoped to just that repo, with Contents,
+   Issues, and Pull requests all set to Read & write (Metadata read-only
+   is required automatically).
+3. Set both in `.env`:
+   ```
+   GITHUB_TOKEN=github_pat_...
+   GITHUB_REPO_FULL_NAME=your-bot-account/that-repo
+   ```
+
+Each deploy seeds three things into that repo:
+
+- a fake "leaked solutions" README under the instance's folder (the
+  LLM-generated artifact, same as every other canary type),
 - an issue + comment thread where a real Thinkst AWS credential gets pasted
   into a "here's my error log, can someone help debug" comment - closer to
   how credentials actually leak than a plain `.env` file (needs
   `THINKST_ALERT_EMAIL` set too; skipped otherwise),
-- one small stray pull request of its own, so a *second* PR appearing later
-  is a genuine signal rather than every repo starting with zero.
+- once per repo (not per instance - see `_seed_stray_pull_request_once`),
+  one small stray pull request of its own, so the repo isn't sitting at a
+  suspiciously pristine zero-PRs state.
 
-`run_github_poller` checks the repo's clone/view traffic and PR count
-against that baseline every `GITHUB_POLL_INTERVAL_SECONDS` (default 1800s)
-and triggers the canary the same way a `log-monitor`/Thinkst hit does; the
-planted credential is separately caught by Thinkst's own poller the moment
-it's actually used, same as the `.env` version.
+`run_github_poller` checks every `GITHUB_POLL_INTERVAL_SECONDS` (default
+1800s) whether any pull request numbered after an instance's baseline
+touches that instance's folder, and triggers the canary the same way a
+`log-monitor`/Thinkst hit does. **Clone/view traffic is not used as a
+signal** - GitHub's traffic API is per-repo, not per-folder, so once
+multiple canaries share one repo it can no longer be attributed to a
+specific instance; this was a deliberate fidelity tradeoff made when
+moving from one-fresh-repo-per-instance to one-shared-repo (see the
+module's docstring). The planted credential is unaffected and still
+caught precisely by Thinkst's own poller the moment it's actually used.
 
 **This is opt-in and creates a real public artifact under a real GitHub
-account** - unlike the local `.canary.test` domains and Thinkst's anonymous
-tokens, a repo you create this way is genuinely visible on github.com,
-counts against that account's API rate limit, and needs manual cleanup
-(deleting it isn't automated). Use a dedicated bot/throwaway account, not
-your own:
+account** - a repo you write to this way is genuinely visible on
+github.com, counts against that account's API rate limit, and needs
+manual cleanup (deleting content isn't automated). Use a dedicated
+bot/throwaway account, not your own: the seeded content is deliberately
+written to look like a careless leak (a sloppy README, an issue comment
+saying "pasting my env, I know I know" with fake credentials in it) - not
+something you want publicly attached to your real identity.
 
-```bash
-export GITHUB_TOKEN=ghp_...   # a PAT with the `repo` scope, for a bot account
-uv run main.py
-```
-
-Without it, `deploy_github_repo` falls back to a decorative no-op, same
+Without both `GITHUB_TOKEN` and `GITHUB_REPO_FULL_NAME` set,
+`deploy_github_repo` falls back to a decorative no-op, same
 pattern as `deploy_noop` and the Thinkst integration above.
 
 ### Local-only caveats

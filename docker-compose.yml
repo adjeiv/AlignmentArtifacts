@@ -16,6 +16,7 @@ services:
       # dedicated bot account's PAT, not your own - this creates a real
       # public repo.
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO_FULL_NAME: ${GITHUB_REPO_FULL_NAME:-}
     volumes:
       - canary-content:/canary-content
       - dns-zones:/dns-zones
