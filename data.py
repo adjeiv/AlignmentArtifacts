@@ -1,4 +1,4 @@
-from rfc.models import Dashboard, Company, Task, IOM, CanaryType, CanaryInstance, CanaryEvent
+from backend.models import Dashboard, Company, Task, IOM, CanaryType, CanaryInstance, CanaryEvent
 
 """
 Internet access

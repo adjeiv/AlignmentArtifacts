@@ -11,8 +11,8 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
 import data
-from rfc.models import CanaryInstance, ComplianceStatus
-from rfc.agents import classify_task_ioms, deploy_canary_instance, spawn_canary_instances_for_task
+from backend.models import CanaryInstance, ComplianceStatus
+from backend.agents import classify_task_ioms, deploy_canary_instance, spawn_canary_instances_for_task
 
 app = FastAPI(title="Alignment Artifacts API")
 
