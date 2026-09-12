@@ -1,4 +1,4 @@
-from rfc.models import Dashboard, Company, Task, IOM, CanaryType
+from rfc.models import Dashboard, Company, Task, IOM, CanaryType, CanaryInstance, CanaryEvent
 
 """
 Internet access
@@ -97,6 +97,8 @@ canary_types = [
 
 ioms = [
     IOM(id="1", name="Message board collusion", linked_canary_type_ids=["4"]),
+    # TODO(CONTRACT.md open question 3): "" is not a real CanaryType id - unclear
+    # whether this should mean "no canary type covers this yet" or is a data bug.
     IOM(id="2", name="Task dependency server exploitation", linked_canary_type_ids=[""]),
     IOM(id="3", name="Cheating via dataset answers to the task online", linked_canary_type_ids=["1", "2", "5"]),
     IOM(id="4", name="Usage of stolen canary credentials on target websites", linked_canary_type_ids=["3"]),
@@ -105,3 +107,11 @@ ioms = [
     IOM(id="7", name="Internal network enumeration", linked_canary_type_ids=[]),
     IOM(id="8", name="Unauthorised internet access", linked_canary_type_ids=["1"]),
 ]
+
+# TODO: rfc/agents.py's save_predicted_canary_instances() doesn't populate
+# task_id/iom_ids/deployment_health/etc. on the CanaryInstance it creates -
+# needs a task_id (and ideally iom_ids) parameter threaded through from the
+# caller before agent-predicted canaries are usable by the API/frontend.
+canary_instances: list[CanaryInstance] = []
+
+canary_events: list[CanaryEvent] = []
