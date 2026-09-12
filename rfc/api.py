@@ -4,13 +4,21 @@ by the in-memory data in data.py and shaped per frontend/src/types/contract.ts
 and rfc/models.py.
 """
 
-from fastapi import FastAPI, HTTPException
+import asyncio
+import uuid
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from pydantic import BaseModel
 
 import data
 from rfc.models import CanaryInstance, ComplianceStatus
-from rfc.agents import generate_all
+from rfc.agents import classify_task_ioms, deploy_canary_instance, spawn_canary_instances_for_task
 
 app = FastAPI(title="Alignment Artifacts API")
+
+
+class CreateTaskRequest(BaseModel):
+    prompt: str
 
 
 # --- Helpers -------------------------------------------------------------
@@ -101,6 +109,32 @@ def list_company_tasks(company_id: str) -> list[data.Task]:
     return [t for t in data.tasks if t.company_id == company_id]
 
 
+async def _generate_and_deploy_canaries(task: data.Task) -> None:
+    """Steps 2-3 of CONTRACT.md's task creation pipeline, run as a background
+    task so POST /api/companies/{company_id}/tasks doesn't block on it."""
+    instances = spawn_canary_instances_for_task(task, data.ioms, data.canary_types)
+    data.canary_instances.extend(instances)
+    await asyncio.gather(
+        *(deploy_canary_instance(ci, task, data.canary_types) for ci in instances)
+    )
+
+
+@app.post("/api/companies/{company_id}/tasks", status_code=201)
+def create_task(
+    company_id: str, body: CreateTaskRequest, background_tasks: BackgroundTasks
+) -> data.Task:
+    _company_or_404(company_id)
+
+    task = data.Task(id=str(uuid.uuid4()), company_id=company_id, prompt=body.prompt)
+    # Step 1 (the compliance-mapping step) runs synchronously - the frontend
+    # gets the task back with its IOM mapping already assigned.
+    task.iom_ids = classify_task_ioms(task, data.ioms)
+    data.tasks.append(task)
+
+    background_tasks.add_task(_generate_and_deploy_canaries, task)
+    return task
+
+
 # TODO (nice-to-have per CONTRACT.md, not blocking the PoC):
 # GET /api/companies/{company_id}/summary - precomputed task/canary counts.
 # No response shape has been defined for it yet.
@@ -116,24 +150,9 @@ def get_task(task_id: str) -> data.Task:
 
 @app.get("/api/tasks/{task_id}/canary-instances")
 def list_task_canary_instances(task_id: str) -> list[CanaryInstance]:
-    task = _task_or_404(task_id)
-    company = _company_or_404(task.company_id)
-    instances = generate_all(task=task, company=company, canary_types=data.canary_types)
+    _task_or_404(task_id)
+    return [ci for ci in data.canary_instances if ci.task_id == task_id]
 
-    # generate_all/save_predicted_canary_instances doesn't know about the
-    # app's data store, so instances it creates never land in
-    # data.canary_instances - meaning GET /api/canary-instances/{id} (and
-    # its /events route) can't find them. Sync them in here, since this is
-    # the endpoint frontend polls that actually discovers new instances.
-    known_ids = {ci.id for ci in data.canary_instances}
-    for instance in instances:
-        if not instance.task_id:
-            instance.task_id = task.id
-        if instance.id not in known_ids:
-            data.canary_instances.append(instance)
-            known_ids.add(instance.id)
-
-    return instances
 
 # --- Canary instances ------------------------------------------------------
 
