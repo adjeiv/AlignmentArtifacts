@@ -1,0 +1,7 @@
+[project]
+name = "Alignment Artifacts"
+version = "0.1.0"
+description = "Apart Research Sprint"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
