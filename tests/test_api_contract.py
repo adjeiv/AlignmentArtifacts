@@ -160,6 +160,7 @@ def test_list_task_canary_instances_shape():
     assert {
         "id",
         "canary_type_id",
+        "name",
         "metadata",
         "task_id",
         "iom_ids",

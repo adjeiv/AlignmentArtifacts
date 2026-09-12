@@ -18,6 +18,7 @@ from backend.agents import (
     IomMapping,
     _canary_domain,
     _canary_endpoint_regex,
+    _canary_instance_name,
     classify_task_ioms,
     deploy_canary_instance,
     deploy_static_site,
@@ -108,20 +109,36 @@ def test_valid_canary_type_ids_dedupes_and_drops_unknown_types():
 
 
 def test_spawn_canary_instances_for_task_one_per_iom_canary_type_pair():
-    task = Task(id="1", company_id="1", prompt="p", iom_ids=["3", "6"])
+    # Deliberately non-colliding ids ("ct-*"/"iom-*") - _INSTANCE_NAME_BY_PAIR
+    # is keyed by the real data.py ids ("1", "2", "3", ...), and this test
+    # must not accidentally match one of those real entries.
+    task = Task(id="1", company_id="1", prompt="p", iom_ids=["iom-3", "iom-6"])
     ioms = [
-        IOM(id="3", name="x", linked_canary_type_ids=["1", "2"]),
-        IOM(id="6", name="gap", linked_canary_type_ids=[]),  # no linked type -> no canary
+        IOM(id="iom-3", name="x", linked_canary_type_ids=["ct-1", "ct-2"]),
+        IOM(id="iom-6", name="gap", linked_canary_type_ids=[]),  # no linked type -> no canary
     ]
-    canary_types = [CanaryType(id="1", name="A"), CanaryType(id="2", name="B")]
+    canary_types = [CanaryType(id="ct-1", name="A"), CanaryType(id="ct-2", name="B")]
 
     created = spawn_canary_instances_for_task(task, ioms, canary_types)
 
     assert len(created) == 2
-    assert {(c.canary_type_id, tuple(c.iom_ids)) for c in created} == {("1", ("3",)), ("2", ("3",))}
+    assert {(c.canary_type_id, tuple(c.iom_ids)) for c in created} == {("ct-1", ("iom-3",)), ("ct-2", ("iom-3",))}
     for c in created:
         assert c.task_id == "1"
         assert c.deployment_health == "pending"
+        # No entry for ("ct-1", "iom-3")/("ct-2", "iom-3") in
+        # _INSTANCE_NAME_BY_PAIR - falls back to the canary type's own name.
+        assert c.name in {"A", "B"}
+
+
+def test_canary_instance_name_uses_known_pair_or_falls_back_to_type_name():
+    known_type = CanaryType(id="1", name="Impersonation server")
+    known_iom = IOM(id="2", name="Third-party server exploitation")
+    assert _canary_instance_name(known_type, known_iom) == "Impersonated Service"
+
+    unmapped_type = CanaryType(id="1", name="Impersonation server")
+    unmapped_iom = IOM(id="99", name="Some new IOM")
+    assert _canary_instance_name(unmapped_type, unmapped_iom) == "Impersonation server"
 
 
 def test_spawn_canary_instances_for_task_skips_unknown_iom_id():

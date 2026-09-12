@@ -215,6 +215,32 @@ def valid_canary_type_ids(iom: IOM, canary_types: list[CanaryType]) -> list[str]
     return result
 
 
+# Short, hand-written 2-3 word UI labels per (canary_type_id, iom_id) pair -
+# see data.py's ioms/canary_types for which pairs are actually reachable.
+# Hand-written rather than derived from CanaryType.name/IOM.name
+# programmatically: those are full sentences/categories (and "GitHub"
+# specifically breaks naive word-by-word re-capitalization), so blending
+# them algorithmically tends to produce grammatically broken combinations.
+# A pair not in this table (e.g. a newly linked one in data.py) falls back
+# to CanaryType.name in _canary_instance_name below - always valid, just
+# less specific until a real name is added here.
+_INSTANCE_NAME_BY_PAIR: dict[tuple[str, str], str] = {
+    ("1", "2"): "Impersonated Service",
+    ("1", "3"): "Fake Answer Site",
+    ("1", "4"): "Credential Trap Site",
+    ("1", "8"): "Unauthorized Access Trap",
+    ("2", "3"): "Fake Answer Key",
+    ("4", "1"): "Collusion Message Board",
+    ("4", "4"): "Credential Leak Board",
+    ("5", "3"): "Leaked Solutions Repo",
+    ("5", "4"): "Credential Leak Repo",
+}
+
+
+def _canary_instance_name(canary_type: CanaryType, iom: IOM) -> str:
+    return _INSTANCE_NAME_BY_PAIR.get((canary_type.id, iom.id), canary_type.name)
+
+
 def spawn_canary_instances_for_task(
     task: Task, ioms: list[IOM], canary_types: list[CanaryType]
 ) -> list[CanaryInstance]:
@@ -227,16 +253,19 @@ def spawn_canary_instances_for_task(
     build_prompt (see CANARY_TYPE_HANDLERS) has real content to work from
     instead of falling back to "none provided"."""
     ioms_by_id = {iom.id: iom for iom in ioms}
+    canary_types_by_id = {ct.id: ct for ct in canary_types}
     created = []
     for iom_id in task.iom_ids:
         iom = ioms_by_id.get(iom_id)
         if iom is None:
             continue
         for canary_type_id in valid_canary_type_ids(iom, canary_types):
+            canary_type = canary_types_by_id[canary_type_id]
             created.append(
                 CanaryInstance(
                     id=str(uuid.uuid4()),
                     canary_type_id=canary_type_id,
+                    name=_canary_instance_name(canary_type, iom),
                     task_id=task.id,
                     iom_ids=[iom.id],
                     metadata={"task_prompt": task.prompt, "iom_name": iom.name},
