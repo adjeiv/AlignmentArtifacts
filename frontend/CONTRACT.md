@@ -52,6 +52,7 @@ All responses JSON, all lists possibly empty, no pagination in this PoC.
 | GET | `/api/tasks/{task_id}/canary-instances` | `CanaryInstance[]` | Mind-map branches |
 | GET | `/api/canary-instances/{canary_instance_id}` | `CanaryInstance` | Canary status view (view 3) |
 | GET | `/api/canary-instances/{canary_instance_id}/events` | `CanaryEvent[]` (newest first) | Canary status view logs |
+| POST | `/api/canary-instances/{canary_instance_id}/trigger/{iom_id}` | `CanaryInstance` | Not called by the frontend - called by `log-monitor/` when a request matches a canary's registered endpoint regex. `iom_id` must be one of the instance's `iom_ids` (400 otherwise). Sets `triggered`/`triggered_iom_id`, appends a `level: "trigger"` `CanaryEvent`; `Company.compliance_status` picks this up on its next fetch, no separate step needed. |
 | GET | `/api/ioms` | `IOM[]` | IOM leaf labels + coverage lookup (rarely changes; fine to fetch once and cache) |
 | GET | `/api/canary-types` | `CanaryType[]` | Canary node labels/icons (rarely changes) |
 

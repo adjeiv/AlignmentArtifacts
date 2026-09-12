@@ -18,3 +18,5 @@ pki/out/
 # Generated canary deploy output / resolver state - runtime data, not source.
 static-site/content/*/
 dns-resolver/zones.json
+log-monitor/endpoints.json
+static-site/logs/

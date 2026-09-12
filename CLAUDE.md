@@ -31,6 +31,15 @@ them, and a dashboard reports compliance status.
   `static-site/` (routes purely by Host header - see its `nginx.conf`), over
   HTTP always and HTTPS if the local CA in `pki/` is trusted. See README.md
   "Custom domains for canaries".
+- Triggering: `deploy_static_site` also registers each instance's
+  (IOM, path-regex) pairs into a shared `endpoints.json`
+  (`_register_endpoints`, `_canary_endpoint_regex` - one regex per canary
+  type). `log-monitor/monitor.py` tails the static-site container's nginx
+  access log and, on a match, calls
+  `POST /api/canary-instances/{id}/trigger/{iom_id}` - this flips
+  `triggered`/`triggered_iom_id` and logs a `CanaryEvent`.
+  `Company.compliance_status` is computed live from `triggered` on every
+  read, so nothing else needs telling about a hit.
 - Tasks seeded in `data.py` (ids "1"-"3") predate this pipeline - they have
   `iom_ids` but no `canary_instances`, so they show as coverage gaps until
   someone creates a new task through the UI.
