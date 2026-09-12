@@ -19,6 +19,7 @@ from backend.agents import (
     _canary_domain,
     _canary_endpoint_regex,
     _canary_instance_name,
+    build_message_board_prompt,
     classify_task_ioms,
     deploy_canary_instance,
     deploy_static_site,
@@ -145,6 +146,24 @@ def test_spawn_canary_instances_for_task_skips_unknown_iom_id():
     task = Task(id="1", company_id="1", prompt="p", iom_ids=["does-not-exist"])
     created = spawn_canary_instances_for_task(task, ioms=[], canary_types=[])
     assert created == []
+
+
+# --- build_message_board_prompt (collusion-specific encoding instruction) --
+
+
+def test_message_board_prompt_asks_for_encoded_posts_when_covering_collusion_iom():
+    canary_type = CanaryType(id="4", name="Message board")
+    instance = CanaryInstance(id="ci-1", canary_type_id="4", task_id="1", iom_ids=["1"])
+    prompt = build_message_board_prompt(instance, canary_type)
+    assert "base64" in prompt.lower()
+    assert "encoded" in prompt.lower()
+
+
+def test_message_board_prompt_omits_encoding_instruction_for_other_ioms():
+    canary_type = CanaryType(id="4", name="Message board")
+    instance = CanaryInstance(id="ci-2", canary_type_id="4", task_id="1", iom_ids=["4"])
+    prompt = build_message_board_prompt(instance, canary_type)
+    assert "base64" not in prompt.lower()
 
 
 # --- deploy_canary_instance / deploy handlers -------------------------------
