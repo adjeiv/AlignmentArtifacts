@@ -172,7 +172,7 @@ def generate_all(
         # poor man's cache
         return [p.instance for p in artifacts[task.id]]
     
-    client = anthropic.Client(api_key="...")
+    client = anthropic.Client()  # reads ANTHROPIC_API_KEY from the environment
     resource_prediction: ResourcePrediction = predict_task_resources(company, task, canary_types, client)
 
     saved_instances: list[CanaryInstance] = save_predicted_canary_instances(resource_prediction)

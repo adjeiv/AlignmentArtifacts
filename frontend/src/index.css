@@ -438,8 +438,11 @@ code,
   padding: 10px 12px;
   font-size: 12px;
   line-height: 1.35;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  /* Wrap at word boundaries (matches the JS layout's own greedy word-wrap
+     simulation, which sizes each box to fit exactly that) - only ever break
+     mid-word as an absolute last resort, for a single word wider than the
+     box itself. */
+  overflow-wrap: break-word;
   transition: border-color 0.35s ease, background-color 0.35s ease, color 0.35s ease;
 }
 

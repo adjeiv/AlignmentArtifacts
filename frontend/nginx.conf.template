@@ -16,9 +16,13 @@ server {
     # Proxied to the backend service (see CONTRACT.md for the endpoint list).
     # ${BACKEND_ORIGIN} is substituted from the environment by nginx's
     # docker-entrypoint on container start (envsubst over *.template files).
+    # No path on proxy_pass (deliberately - it's a variable, so nginx would
+    # forward the literal path here instead of the actual request path):
+    # backend routes already start with /api/, so we want a byte-for-byte
+    # passthrough of the incoming URI, which omitting it gives us.
     location /api/ {
         set $backend "${BACKEND_ORIGIN}";
-        proxy_pass $backend/api/;
+        proxy_pass $backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
