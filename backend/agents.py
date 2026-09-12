@@ -14,6 +14,7 @@ import requests
 from pydantic import BaseModel, ConfigDict
 
 import data
+from backend.github_canary import build_github_repo_prompt, deploy_github_repo
 from backend.models import CanaryEvent, CanaryInstance, CanaryType, DeploymentHealth, IOM, LogLevel, Task
 
 MODEL = "claude-sonnet-5"
@@ -585,6 +586,7 @@ CANARY_TYPE_HANDLERS: dict[str, CanaryTypeHandler] = {
     "1": CanaryTypeHandler(build_prompt=build_impersonation_server_prompt, deploy=deploy_static_site),  # Impersonation server
     "2": CanaryTypeHandler(build_prompt=build_fake_answers_prompt, deploy=deploy_static_site),  # Fake answers canary
     "4": CanaryTypeHandler(build_prompt=build_message_board_prompt, deploy=deploy_static_site),  # Message board
+    "5": CanaryTypeHandler(build_prompt=build_github_repo_prompt, deploy=deploy_github_repo),  # GitHub repository
 }
 
 DEFAULT_CANARY_TYPE_HANDLER = CanaryTypeHandler(build_prompt=build_artifact_generation_prompt, deploy=deploy_noop)

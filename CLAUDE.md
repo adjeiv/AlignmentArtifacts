@@ -52,6 +52,20 @@ them, and a dashboard reports compliance status.
   calls the same `trigger_canary_instance` as the nginx-log path - this
   is a separate detection mechanism because credential *use* is outbound
   (an AWS API call, a webhook fetch), not a request to our own nginx.
+- GitHub repository canaries (`CanaryType` id "5"): `backend/github_canary.py`
+  creates a real, public GitHub repo (owned by whichever account
+  `GITHUB_TOKEN` belongs to) seeded with a fake "leaked solutions" README,
+  a higher-fidelity stand-in than a static-site canary for the "GitHub
+  repositories" mentions in `data.py`'s IOM notes. Kept as its own module
+  rather than folded into `backend/agents.py` since it owns a distinct
+  external service, auth, and poller. `run_github_poller` (also started
+  from `backend/api.py`'s `lifespan`) checks the repo's traffic/PR activity
+  against its zero baseline every `GITHUB_POLL_INTERVAL_SECONDS` (default
+  1800s - GitHub's own traffic stats only refresh ~hourly). Unset
+  `GITHUB_TOKEN` means `deploy_github_repo` falls back to the same
+  decorative no-op as `deploy_noop`. See README.md "GitHub repository
+  canaries" before enabling - this creates a real public artifact under a
+  real account.
 - Tasks seeded in `data.py` (ids "1"-"3") predate this pipeline - they have
   `iom_ids` but no `canary_instances`, so they show as coverage gaps until
   someone creates a new task through the UI.

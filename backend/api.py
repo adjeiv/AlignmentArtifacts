@@ -20,18 +20,20 @@ from backend.agents import (
     spawn_canary_instances_for_task,
 )
 from backend.agents import trigger_canary_instance as _trigger_canary_instance
+from backend.github_canary import run_github_poller
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # No-ops immediately if THINKST_ALERT_EMAIL isn't set (see
-    # backend/agents.py's run_thinkst_poller) - polls canarytokens.org's
-    # /history for planted credentials (deploy_static_site's .env) actually
-    # being used, a detection path log-monitor/ can't cover since that's
-    # outbound (AWS API calls, webhook fetches), not a hit on our own nginx.
-    poller = asyncio.create_task(run_thinkst_poller(data.canary_instances))
+    # Both no-op immediately unless configured (THINKST_ALERT_EMAIL /
+    # GITHUB_TOKEN) - each polls a different third-party service for signs a
+    # planted credential/repo was actually used, a detection path
+    # log-monitor/ can't cover since that activity never touches our nginx.
+    thinkst_poller = asyncio.create_task(run_thinkst_poller(data.canary_instances))
+    github_poller = asyncio.create_task(run_github_poller(data.canary_instances, _trigger_canary_instance))
     yield
-    poller.cancel()
+    thinkst_poller.cancel()
+    github_poller.cancel()
 
 
 app = FastAPI(title="Alignment Artifacts API", lifespan=lifespan)

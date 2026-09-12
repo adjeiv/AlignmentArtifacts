@@ -11,6 +11,11 @@ services:
       # Opt-in - unset means .env planting silently no-ops (see README.md
       # "Real credential canaries"). Must be an email you actually control.
       THINKST_ALERT_EMAIL: ${THINKST_ALERT_EMAIL:-}
+      # Opt-in - unset means the GitHub repository canary type falls back to
+      # a no-op (see README.md "GitHub repository canaries"). Use a
+      # dedicated bot account's PAT, not your own - this creates a real
+      # public repo.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
       - canary-content:/canary-content
       - dns-zones:/dns-zones

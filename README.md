@@ -150,6 +150,31 @@ though this integration only ever polls `/history` itself and never relies
 on that channel actually firing, so expect Thinkst's own alert emails to
 land in that inbox too when a token fires.
 
+### GitHub repository canaries
+
+The "GitHub repository" canary type (`CanaryType` id "5") creates a real,
+public GitHub repo seeded with a fake "leaked solutions" README, owned by
+whichever account `GITHUB_TOKEN` belongs to - see `backend/github_canary.py`.
+`run_github_poller` checks the repo's clone/view traffic and pull requests
+against its baseline (zero, since it's freshly created) every
+`GITHUB_POLL_INTERVAL_SECONDS` (default 1800s) and triggers the canary the
+same way a `log-monitor`/Thinkst hit does.
+
+**This is opt-in and creates a real public artifact under a real GitHub
+account** - unlike the local `.canary.test` domains and Thinkst's anonymous
+tokens, a repo you create this way is genuinely visible on github.com,
+counts against that account's API rate limit, and needs manual cleanup
+(deleting it isn't automated). Use a dedicated bot/throwaway account, not
+your own:
+
+```bash
+export GITHUB_TOKEN=ghp_...   # a PAT with the `repo` scope, for a bot account
+uv run main.py
+```
+
+Without it, `deploy_github_repo` falls back to a decorative no-op, same
+pattern as `deploy_noop` and the Thinkst integration above.
+
 ### Local-only caveats
 
 - **Skip `ca-trust` and canaries still work over plain HTTP** -
