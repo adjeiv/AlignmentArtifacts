@@ -1,16 +1,24 @@
 """
 FastAPI app serving the endpoints described in frontend/CONTRACT.md, backed
 by the in-memory data in data.py and shaped per frontend/src/types/contract.ts
-and rfc/models.py.
+and backend/models.py.
 """
 
-from fastapi import FastAPI, HTTPException
+import asyncio
+import uuid
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from pydantic import BaseModel
 
 import data
-from rfc.models import CanaryInstance, ComplianceStatus
-from rfc.agents import ensure_pipeline_started
+from backend.models import CanaryInstance, ComplianceStatus
+from backend.agents import classify_task_ioms, deploy_canary_instance, spawn_canary_instances_for_task
 
 app = FastAPI(title="Alignment Artifacts API")
+
+
+class CreateTaskRequest(BaseModel):
+    prompt: str
 
 
 # --- Helpers -------------------------------------------------------------
@@ -101,6 +109,38 @@ def list_company_tasks(company_id: str) -> list[data.Task]:
     return [t for t in data.tasks if t.company_id == company_id]
 
 
+async def _deploy_canaries(task: data.Task, instances: list[CanaryInstance]) -> None:
+    """Step 3 of CONTRACT.md's task creation pipeline, run as a background
+    task so POST /api/companies/{company_id}/tasks doesn't block on it - this
+    is the only part that makes Claude calls, so it's the only part backgrounded."""
+    await asyncio.gather(
+        *(deploy_canary_instance(ci, task, data.canary_types) for ci in instances)
+    )
+
+
+@app.post("/api/companies/{company_id}/tasks", status_code=201)
+def create_task(
+    company_id: str, body: CreateTaskRequest, background_tasks: BackgroundTasks
+) -> data.Task:
+    _company_or_404(company_id)
+
+    task = data.Task(id=str(uuid.uuid4()), company_id=company_id, prompt=body.prompt)
+    # Step 1 (the compliance-mapping step) runs synchronously - the frontend
+    # gets the task back with its IOM mapping already assigned.
+    task.iom_ids = classify_task_ioms(task, data.ioms)
+    data.tasks.append(task)
+
+    # Step 2 (spawning) also runs synchronously - it's pure computation, no
+    # API calls - so GET .../canary-instances is guaranteed non-empty by the
+    # time the caller has this response, and an empty list there always means
+    # "genuinely no canary coverage", never "hasn't been spawned yet".
+    instances = spawn_canary_instances_for_task(task, data.ioms, data.canary_types)
+    data.canary_instances.extend(instances)
+
+    background_tasks.add_task(_deploy_canaries, task, instances)
+    return task
+
+
 # TODO (nice-to-have per CONTRACT.md, not blocking the PoC):
 # GET /api/companies/{company_id}/summary - precomputed task/canary counts.
 # No response shape has been defined for it yet.
@@ -114,37 +154,17 @@ def get_task(task_id: str) -> data.Task:
     return _task_or_404(task_id)
 
 
-def _register_canary_instance(instance: CanaryInstance) -> None:
-    """
-    ensure_pipeline_started's on_instance_ready callback: lands a newly
-    generated instance in the shared data store as soon as it exists (called
-    from the background pipeline thread, possibly well after the request
-    that triggered it has already returned) so the next poll of this route -
-    or GET /api/canary-instances/{id} - can find it.
-    """
-    if not any(ci.id == instance.id for ci in data.canary_instances):
-        data.canary_instances.append(instance)
-
-
 @app.get("/api/tasks/{task_id}/canary-instances")
 def list_task_canary_instances(task_id: str) -> list[CanaryInstance]:
-    task = _task_or_404(task_id)
-    company = _company_or_404(task.company_id)
-
-    # Never blocks: starts the (slow, real `claude` CLI) pipeline in the
-    # background at most once per task, and this route always just returns
-    # whatever's landed in the store so far - which is how the frontend's
-    # polling is built to see canaries "arrive" as they're generated
-    # (see frontend/CONTRACT.md's task-creation-pipeline section).
-    ensure_pipeline_started(
-        task=task,
-        company=company,
-        canary_types=data.canary_types,
-        ioms=data.ioms,
-        on_instance_ready=_register_canary_instance,
-    )
-
+    # Never blocks: create_task() already spawned every CanaryInstance for
+    # this task synchronously (only their deploy - the slow, real `claude`
+    # CLI part - is backgrounded), so this is just a filter. An empty list
+    # here always means "genuinely no canary coverage", never "hasn't been
+    # generated yet" (see frontend/CONTRACT.md's task-creation-pipeline
+    # section).
+    _task_or_404(task_id)
     return [ci for ci in data.canary_instances if ci.task_id == task_id]
+
 
 # --- Canary instances ------------------------------------------------------
 

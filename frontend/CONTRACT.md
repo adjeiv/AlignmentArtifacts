@@ -5,8 +5,8 @@ please push back on anything that doesn't fit the backend's plans.
 
 ## Data model
 
-The frontend's fields have been folded into `rfc/models.py` directly (there's
-no longer a separate `rfc/frontend_models.py` - that file's proposed
+The frontend's fields have been folded into `backend/models.py` directly
+(there's no longer a separate `rfc/frontend_models.py` - that file's proposed
 extensions are now the real `Task` and `CanaryInstance` dataclasses):
 
 - `Task.iom_ids: list[str]` - the IOMs this task has been mapped to. Drives
@@ -24,9 +24,9 @@ extensions are now the real `Task` and `CanaryInstance` dataclasses):
   values, computed from whether any canary covering the company's tasks has
   triggered - not a certification label like the old mock value ("SOC2
   compliant"). The API computes this per-request rather than trusting the
-  stored field (see `rfc/api.py`).
+  stored field (see `backend/api.py`).
 
-`frontend/src/types/contract.ts` mirrors `rfc/models.py` 1:1 for the
+`frontend/src/types/contract.ts` mirrors `backend/models.py` 1:1 for the
 frontend; the Python dataclasses are canonical.
 
 ## Derivation rule (frontend assumes this; flag if backend disagrees)
@@ -62,48 +62,43 @@ Nice-to-have, not blocking the PoC:
 
 ## Task creation pipeline
 
-`POST /api/companies/{company_id}/tasks` (`{"prompt": string}`) is expected
-to, synchronously before responding:
-1. Create the `Task` and assign `iom_ids` (the compliance-mapping step).
+`POST /api/companies/{company_id}/tasks` (`{"prompt": string}`) implements
+this as, synchronously before responding (both fast - no `claude` CLI call
+in step 2, and only a small structured one in step 1):
+1. `classify_task_ioms` - assign the `Task.iom_ids` (the compliance-mapping
+   step).
+2. `spawn_canary_instances_for_task` - one `CanaryInstance`
+   (`deployment_health: "pending"`) per (mapped IOM, linked canary type)
+   pair - an IOM linked to several canary types gets one of each; an IOM
+   with no linked canary type stays an uncovered gap, same as the seed
+   data's IOM "6" and "7". So the response already has `iom_ids` filled in,
+   and `GET .../canary-instances` is guaranteed non-empty by the time the
+   caller has it (an empty list there always means "genuinely no
+   coverage", never "hasn't been generated yet").
 
-Then, asynchronously (i.e. don't block the response on this):
-2. For each mapped IOM with at least one `linked_canary_type_id`, generate
-   a `CanaryInstance` row (`deployment_health: "pending"`) - IOMs with no
-   linked canary type stay uncovered gaps, same as the seed data's IOM "6"
-   and "7".
-3. Deploy each generated instance, flipping it to
-   `deployment_health: "active"` (or `"degraded"`/`"offline"` if that
-   fails) once it's live.
+Then, backgrounded (FastAPI `BackgroundTasks`, run concurrently via
+`asyncio.gather` - this is the only part that calls `claude`, so it's the
+only part that doesn't block the response):
+3. `deploy_canary_instance` per spawned instance - generates its artifact
+   and flips it to `deployment_health: "active"` (see
+   `backend/agents.py`'s `CANARY_TYPE_HANDLERS` - message board canaries get
+   a real deploy onto the `message-board/` container; everything else is
+   `deploy_noop`, which never produces `"degraded"`/`"offline"` yet).
 
 The frontend polls `GET /tasks/{task_id}/canary-instances` every second
 after creating a task (and while viewing any task with `pending` instances)
-until every returned instance has left `"pending"`, then stops. It never
-assumes a fixed instance count up front - new rows appearing mid-poll is
-exactly how "canaries are still being generated" is expected to look.
-`frontend/src/api/mockPipeline.ts` is a mock stand-in for all of this
-(fake IOM mapping, staggered generation, delayed deploy) so the create-task
-UI has something to poll against before the real pipeline exists.
+until every returned instance has left `"pending"`, then stops.
+`frontend/src/api/mockPipeline.ts` is a mock stand-in for all of this (fake
+IOM mapping, staggered generation, delayed deploy) so the create-task UI
+has something to poll against in mock mode.
 
 ## Open questions for backend
 
 1. Auth: none assumed yet for the PoC - is there a token/session to plumb
    through later?
-2. Is `CanaryInstance.metadata` meant to carry type-specific fields (e.g. a
-   Website canary's HTML template, a Credential canary's seeded key) that
-   the frontend should render, or is it backend-internal?
-3. Should `IOM.linked_canary_type_ids` containing `""` (see IOM id `"2"` in
-   `data.py`) be treated as "no canary type covers this yet", or is that a
-   data bug to clean up?
-4. ~~`GET /api/tasks/{id}/canary-instances` runs the pipeline
-   synchronously~~ - fixed: `rfc.agents.ensure_pipeline_started` runs it in
-   a background thread and the route always returns immediately. Still
-   true on a cold task: the whole prediction call resolves at once
-   (~80-100s observed), so all of a task's canaries currently appear
-   together rather than trickling in one at a time - not per-canary
-   incremental yet, just non-blocking.
-5. There's still no `Task.deployment_health` transition anywhere -
-   generated instances stay `"pending"` forever (no deploy step exists).
-   The frontend's polling is built to keep polling while anything is
-   `"pending"`, capped at `MAX_POLL_TICKS`, so this currently means every
-   real task's canaries poll for the full cap and then just stay showing
-   "pending" rather than settling to `"active"`.
+2. `CanaryInstance.metadata` now carries `"artifact"` (the generated content
+   placed at the canary) - is the frontend meant to render/link to it
+   anywhere (e.g. the canary status view), or is it backend/deploy-internal?
+3. `deploy_canary_instance` always succeeds (after a simulated delay) - is a
+   failure path (`"degraded"`/`"offline"`) planned, since the frontend
+   already has tones for both?

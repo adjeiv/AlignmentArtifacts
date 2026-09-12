@@ -1,25 +1,27 @@
 """
-rfc/agents.py shells out to the real `claude` CLI (see CLAUDE.md) - these
-tests mock subprocess.run so the suite never actually invokes it.
+backend/agents.py shells out to the real `claude` CLI (see CLAUDE.md) - these
+tests mock subprocess.run (or run_claude itself) so the suite never actually
+invokes it.
 """
 
+import asyncio
 import json
-import threading
-import time
 from unittest.mock import patch
 
 import pytest
 
-from rfc.agents import (
+from backend.agents import (
+    CANARY_TYPE_HANDLERS,
     ClaudeCLIError,
-    ResourcePrediction,
-    ensure_pipeline_started,
-    generate_canary_artifact,
-    predict_task_resources,
+    IomMapping,
+    classify_task_ioms,
+    deploy_canary_instance,
+    get_canary_type_handler,
     run_claude,
-    save_predicted_canary_instances,
+    spawn_canary_instances_for_task,
+    valid_canary_type_ids,
 )
-from rfc.models import CanaryInstance, CanaryType, Company, IOM, Task
+from backend.models import CanaryInstance, CanaryType, IOM, Task
 
 
 def _fake_proc(returncode=0, stdout="", stderr=""):
@@ -31,6 +33,9 @@ def _fake_proc(returncode=0, stdout="", stderr=""):
     p.stdout = stdout
     p.stderr = stderr
     return p
+
+
+# --- run_claude ------------------------------------------------------------
 
 
 def test_run_claude_returns_result_text():
@@ -71,103 +76,73 @@ def test_run_claude_raises_on_invalid_json():
             run_claude("say hi")
 
 
-def test_predict_task_resources_parses_llm_json_into_schema():
-    company = Company(id="1", name="Acme", domains=["acme.com"])
-    task = Task(id="1", company_id="1", prompt="RAG on company data", iom_ids=["8"])
-    canary_types = [CanaryType(id="1", name="Website")]
+# --- classify_task_ioms -----------------------------------------------------
+
+
+def test_classify_task_ioms_filters_ids_outside_the_catalog():
+    task = Task(id="1", company_id="1", prompt="RAG on company data")
     ioms = [IOM(id="8", name="Unauthorised internet access", linked_canary_type_ids=["1"])]
 
-    llm_json = json.dumps(
-        {
-            "likely_resources": [
-                {
-                    "reasoning": "might fetch an internal-looking doc portal",
-                    "canary_type": {"id": "1", "name": "Website"},
-                    "metadata": {"topic": "internal wiki"},
-                    "iom_ids": ["8"],
-                }
-            ]
-        }
-    )
-    with patch("rfc.agents.run_claude", return_value=llm_json) as mock_run_claude:
-        prediction = predict_task_resources(company, task, canary_types, ioms)
+    llm_json = IomMapping(iom_ids=["8", "not-a-real-id"]).model_dump_json()
+    with patch("backend.agents.run_claude", return_value=llm_json) as mock_run_claude:
+        result = classify_task_ioms(task, ioms)
 
-    assert isinstance(prediction, ResourcePrediction)
-    assert len(prediction.likely_resources) == 1
-    assert prediction.likely_resources[0].canary_type.name == "Website"
-    assert prediction.likely_resources[0].iom_ids == ["8"]
-    # predict_task_resources must pass the schema through so the CLI can
-    # validate/constrain its own output against it.
-    assert mock_run_claude.call_args.kwargs["output_json_schema"] == ResourcePrediction.model_json_schema()
-    # And the prompt itself must only surface the task's own mapped IOMs.
-    prompt = mock_run_claude.call_args.args[0]
-    assert "id=8: Unauthorised internet access" in prompt
+    # The model echoed an id outside the catalog it was given - must be dropped.
+    assert result == ["8"]
+    assert mock_run_claude.call_args.kwargs["output_json_schema"] == IomMapping.model_json_schema()
 
 
-def test_save_predicted_canary_instances_sets_task_id_and_iom_ids():
-    prediction = ResourcePrediction.model_validate(
-        {
-            "likely_resources": [
-                {
-                    "reasoning": "r",
-                    "canary_type": {"id": "1", "name": "Website"},
-                    "metadata": {"topic": "internal wiki"},
-                    "iom_ids": ["8"],
-                }
-            ]
-        }
-    )
-    created = save_predicted_canary_instances(prediction, task_id="task-42")
-    assert len(created) == 1
-    assert created[0].task_id == "task-42"
-    assert created[0].iom_ids == ["8"]
-    assert created[0].canary_type_id == "1"
-    assert created[0].metadata["reasoning"] == "r"
+# --- spawn_canary_instances_for_task / valid_canary_type_ids ---------------
 
 
-def test_generate_canary_artifact_returns_llm_text():
-    ci = CanaryInstance(id="ci-1", canary_type_id="1", metadata={"topic": "internal wiki"})
-    ct = CanaryType(id="1", name="Website")
-    with patch("rfc.agents.run_claude", return_value="<html>fake page</html>") as mock_run_claude:
-        artifact = generate_canary_artifact(ci, ct)
-    assert artifact == "<html>fake page</html>"
-    # No JSON schema for this call - it's meant to return free-form content.
-    assert mock_run_claude.call_args.kwargs.get("output_json_schema") is None
+def test_valid_canary_type_ids_dedupes_and_drops_unknown_types():
+    iom = IOM(id="3", name="x", linked_canary_type_ids=["1", "1", "2", "unknown"])
+    canary_types = [CanaryType(id="1", name="A"), CanaryType(id="2", name="B")]
+    assert valid_canary_type_ids(iom, canary_types) == ["1", "2"]
 
 
-def test_ensure_pipeline_started_does_not_block_and_is_idempotent():
-    """
-    This is the fix for the endpoint that polls it hanging: the route must
-    never wait on the real (slow) pipeline, and re-polling the same task
-    while it's still running must not kick off a second one.
-    """
-    call_count = {"n": 0}
-    started = threading.Event()
-    release = threading.Event()
+def test_spawn_canary_instances_for_task_one_per_iom_canary_type_pair():
+    task = Task(id="1", company_id="1", prompt="p", iom_ids=["3", "6"])
+    ioms = [
+        IOM(id="3", name="x", linked_canary_type_ids=["1", "2"]),
+        IOM(id="6", name="gap", linked_canary_type_ids=[]),  # no linked type -> no canary
+    ]
+    canary_types = [CanaryType(id="1", name="A"), CanaryType(id="2", name="B")]
 
-    def slow_predict(*args, **kwargs):
-        call_count["n"] += 1
-        started.set()
-        assert release.wait(timeout=2), "test itself timed out waiting to release the fake pipeline"
-        return ResourcePrediction(likely_resources=[])
+    created = spawn_canary_instances_for_task(task, ioms, canary_types)
 
-    task = Task(id="task-nonblocking", company_id="1", prompt="p")
-    company = Company(id="1", name="Acme", domains=[])
+    assert len(created) == 2
+    assert {(c.canary_type_id, tuple(c.iom_ids)) for c in created} == {("1", ("3",)), ("2", ("3",))}
+    for c in created:
+        assert c.task_id == "1"
+        assert c.deployment_health == "pending"
 
-    with patch("rfc.agents.predict_task_resources", side_effect=slow_predict):
-        t0 = time.monotonic()
-        ensure_pipeline_started(task, company, [], [], on_instance_ready=lambda i: None)
-        elapsed = time.monotonic() - t0
-        assert elapsed < 0.5, "ensure_pipeline_started blocked on the pipeline instead of backgrounding it"
 
-        assert started.wait(timeout=2), "background thread never started the pipeline"
+def test_spawn_canary_instances_for_task_skips_unknown_iom_id():
+    task = Task(id="1", company_id="1", prompt="p", iom_ids=["does-not-exist"])
+    created = spawn_canary_instances_for_task(task, ioms=[], canary_types=[])
+    assert created == []
 
-        # Same task, still running - must not start a second background run.
-        ensure_pipeline_started(task, company, [], [], on_instance_ready=lambda i: None)
-        release.set()
-        # Give the (single) background thread a moment to finish before asserting.
-        for _ in range(20):
-            if call_count["n"] == 1:
-                break
-            time.sleep(0.05)
-        assert call_count["n"] == 1
+
+# --- deploy_canary_instance / deploy handlers -------------------------------
+
+
+def test_get_canary_type_handler_routes_message_board_to_its_own_handler():
+    assert get_canary_type_handler("4") is CANARY_TYPE_HANDLERS["4"]
+    # Anything else falls back to the generic default.
+    assert get_canary_type_handler("1") is not CANARY_TYPE_HANDLERS["4"]
+
+
+def test_deploy_canary_instance_default_handler_activates_and_sets_target_url():
+    instance = CanaryInstance(id="ci-1", canary_type_id="1", task_id="1", iom_ids=["8"])
+    task = Task(id="1", company_id="1", prompt="RAG on company data")
+    canary_types = [CanaryType(id="1", name="Impersonation server")]
+
+    with patch("backend.agents.run_claude", return_value="fake artifact") as mock_run_claude:
+        asyncio.run(deploy_canary_instance(instance, task, canary_types))
+
+    mock_run_claude.assert_called_once()
+    assert instance.deployment_health == "active"
+    assert instance.metadata["artifact"] == "fake artifact"
+    assert instance.target_url is not None
+    assert instance.deployed_at is not None

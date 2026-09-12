@@ -1,7 +1,7 @@
 # canarynet frontend
 
 PoC UI for the three views: company dashboard, task mind-map, canary status.
-Ships with mock data (`src/api/mockData.ts`) matching `../rfc/models.py` so
+Ships with mock data (`src/api/mockData.ts`) matching `../backend/models.py` so
 it runs standalone with no backend - see `CONTRACT.md` for the API this is
 meant to consume when pointed at the real one.
 

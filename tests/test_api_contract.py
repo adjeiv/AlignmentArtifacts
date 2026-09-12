@@ -5,34 +5,20 @@ This is not exhaustive - it's a floor to catch a route/field disappearing or
 changing shape without CONTRACT.md (and this suite) being updated to match,
 per CLAUDE.md.
 
-Never calls the real `claude` CLI: rfc.agents.ensure_pipeline_started is
-monkeypatched wherever a route depends on it.
+Never calls the real `claude` CLI: backend.agents.classify_task_ioms and
+.deploy_canary_instance are monkeypatched wherever a route depends on them.
 """
 
 from fastapi.testclient import TestClient
 
 import data
-from rfc.api import app
-from rfc.models import CanaryEvent, CanaryInstance
+from backend.api import app
+from backend.models import CanaryEvent, CanaryInstance
 
 client = TestClient(app)
 
 KNOWN_COMPANY_ID = "1"
 KNOWN_TASK_ID = "1"
-
-
-def _fake_ensure_pipeline_started(task, company, canary_types, ioms, on_instance_ready):
-    # Synchronous stand-in for the real (backgrounded) pipeline: calls the
-    # callback immediately instead of spawning a thread that calls it later.
-    on_instance_ready(
-        CanaryInstance(
-            id="test-ci-1",
-            canary_type_id=canary_types[0].id,
-            task_id=task.id,
-            iom_ids=[],
-            deployment_health="pending",
-        )
-    )
 
 
 # --- Companies -------------------------------------------------------------
@@ -102,18 +88,75 @@ def test_get_task_404_for_unknown_id():
     assert res.status_code == 404
 
 
-# --- Canary instances (ensure_pipeline_started is mocked - no live claude CLI calls) ---
+# --- Task creation (classify_task_ioms / deploy_canary_instance mocked) ----
 
 
-def test_list_task_canary_instances_shape(monkeypatch):
-    monkeypatch.setattr("rfc.api.ensure_pipeline_started", _fake_ensure_pipeline_started)
+def test_create_task_maps_ioms_and_spawns_canaries(monkeypatch):
+    monkeypatch.setattr("backend.api.classify_task_ioms", lambda task, ioms: ["8"])
+
+    def fake_spawn(task, ioms, canary_types):
+        return [
+            CanaryInstance(
+                id="spawned-test-ci",
+                canary_type_id=canary_types[0].id,
+                task_id=task.id,
+                iom_ids=["8"],
+            )
+        ]
+
+    monkeypatch.setattr("backend.api.spawn_canary_instances_for_task", fake_spawn)
+
+    async def fake_deploy(instance, task, canary_types):
+        instance.deployment_health = "active"
+
+    monkeypatch.setattr("backend.api.deploy_canary_instance", fake_deploy)
+
+    res = client.post(f"/api/companies/{KNOWN_COMPANY_ID}/tasks", json={"prompt": "a brand new task"})
+    assert res.status_code == 201
+    task = res.json()
+    assert task["prompt"] == "a brand new task"
+    assert task["company_id"] == KNOWN_COMPANY_ID
+    assert task["iom_ids"] == ["8"]
+
+    # Step 2 (spawning) is synchronous, so the spawned instance must already
+    # be visible - both via this task's canary-instances list...
+    instances_res = client.get(f"/api/tasks/{task['id']}/canary-instances")
+    assert instances_res.status_code == 200
+    ids = {i["id"] for i in instances_res.json()}
+    assert "spawned-test-ci" in ids
+
+    # ...and via the canary-instance detail/events routes.
+    detail_res = client.get("/api/canary-instances/spawned-test-ci")
+    assert detail_res.status_code == 200
+    events_res = client.get("/api/canary-instances/spawned-test-ci/events")
+    assert events_res.status_code == 200
+
+
+def test_create_task_404_for_unknown_company(monkeypatch):
+    res = client.post("/api/companies/does-not-exist/tasks", json={"prompt": "p"})
+    assert res.status_code == 404
+
+
+# --- Canary instances --------------------------------------------------
+
+
+def test_list_task_canary_instances_shape():
+    # create_task() is what normally populates this (see above) - appending
+    # directly here exercises the route (a plain filter, no side effects) on
+    # its own.
+    data.canary_instances.append(
+        CanaryInstance(
+            id="test-ci-shape",
+            canary_type_id=data.canary_types[0].id,
+            task_id=KNOWN_TASK_ID,
+            iom_ids=["8"],
+        )
+    )
 
     res = client.get(f"/api/tasks/{KNOWN_TASK_ID}/canary-instances")
     assert res.status_code == 200
     instances = res.json()
-    assert isinstance(instances, list) and len(instances) == 1
-
-    instance = instances[0]
+    instance = next(i for i in instances if i["id"] == "test-ci-shape")
     assert {
         "id",
         "canary_type_id",
@@ -128,23 +171,6 @@ def test_list_task_canary_instances_shape(monkeypatch):
         "target_url",
     } <= instance.keys()
     assert instance["task_id"] == KNOWN_TASK_ID
-
-
-def test_generated_canary_instances_are_synced_into_the_store(monkeypatch):
-    monkeypatch.setattr("rfc.api.ensure_pipeline_started", _fake_ensure_pipeline_started)
-
-    list_res = client.get(f"/api/tasks/{KNOWN_TASK_ID}/canary-instances")
-    instance_id = list_res.json()[0]["id"]
-
-    # _register_canary_instance lands the pipeline's output in data.canary_instances
-    # so these two routes can find it afterwards - verify that actually holds.
-    detail_res = client.get(f"/api/canary-instances/{instance_id}")
-    assert detail_res.status_code == 200
-    assert detail_res.json()["id"] == instance_id
-
-    events_res = client.get(f"/api/canary-instances/{instance_id}/events")
-    assert events_res.status_code == 200
-    assert isinstance(events_res.json(), list)
 
 
 def test_get_canary_instance_404_for_unknown_id():
