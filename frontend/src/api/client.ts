@@ -25,7 +25,7 @@ import { mockCreateTask } from "./mockPipeline";
  * without any caller changes.
  */
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK !== "false";
+export const USE_MOCK = import.meta.env.VITE_USE_MOCK !== "false";
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const MOCK_DELAY_MS = 180;
 

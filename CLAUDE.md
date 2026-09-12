@@ -6,17 +6,27 @@ them, and a dashboard reports compliance status.
 
 - Backend: FastAPI app at repo root (`rfc/api.py`, `rfc/models.py`,
   `rfc/agents.py`, `data.py` as the in-memory store, `main.py` to run it).
-- Frontend: Vite + React + TypeScript in `frontend/`.
-- `docker-compose.yml` runs both together.
+  Everything runs directly via `uv` - no Docker.
+- Frontend: Vite + React + TypeScript in `frontend/`, run via `npm`.
+- `rfc/agents.py` calls Claude by shelling out to the `claude` CLI
+  (`run_claude()`, `claude -p ...`) rather than the Anthropic SDK - it
+  authenticates however `claude` is already logged in on this machine, so
+  there's no API key to configure anywhere in this repo. Each call is
+  noticeably slower than a raw API call (the CLI harness itself has
+  startup overhead) - a structured `--json-schema` prediction call has
+  been observed taking ~80-100s. Because of that,
+  `GET /api/tasks/{id}/canary-instances` never runs the pipeline inline:
+  `ensure_pipeline_started()` kicks it off in a background thread (once per
+  task, guarded against duplicate starts) and the route always returns
+  immediately with whatever's in the store so far - the frontend's polling
+  is what surfaces the canaries as they land.
 
 ## Running things
 
-- `make up` - build and run the full stack (frontend + backend) via
-  Docker Compose. Requires `ANTHROPIC_API_KEY` - copy `.env.example` to
-  `.env` and fill it in first (see `docker-compose.yml`).
-- `make down` - stop the stack.
-- `make build` - build the images without starting them.
-- `make logs` - tail logs from both containers.
+- `make install` - one-time setup: `uv sync` + `npm install` (frontend/).
+- `make up` - run backend + frontend together in the foreground (Ctrl+C
+  stops both). No API key needed - see above.
+- `make backend` / `make frontend` - run just one half.
 - `make test` - run the backend test suite (`uv run pytest`).
 
 ## The contract is the source of truth between frontend and backend
@@ -54,9 +64,14 @@ should be checked with unit tests in `tests/`, run via `uv run pytest`.
   fields the frontend actually reads). Extend it - or add a new test module
   - when you add/change a route or a response field, rather than only
   eyeballing it.
-- Tests must not require a real `ANTHROPIC_API_KEY` or make live Anthropic
-  API calls - `rfc/agents.py`'s `generate_all` (used by
-  `/api/tasks/{id}/canary-instances`) calls the Anthropic API for real, so
-  tests that exercise that route monkeypatch it. Follow that pattern for
-  any other route that ends up depending on `agents.py`.
+- Tests must never invoke the real `claude` CLI (slow, costs real usage,
+  and won't run in an environment that isn't logged in) - mock
+  `subprocess.run` (see `tests/test_agents.py`) or monkeypatch
+  `rfc.agents.run_claude`/`rfc.api.ensure_pipeline_started` for anything
+  upstream of it (see `tests/test_api_contract.py`), depending on what the
+  test needs to exercise.
+- If you touch `ensure_pipeline_started` (or anything it calls), keep
+  `tests/test_agents.py::test_ensure_pipeline_started_does_not_block_and_is_idempotent`
+  passing - that's what pins down "the route never blocks, and polling the
+  same task twice never starts the pipeline twice".
 - Run `uv run pytest` before considering a backend change done.

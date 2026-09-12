@@ -1,4 +1,5 @@
 import { Link, Route, Routes } from "react-router-dom";
+import { USE_MOCK } from "./api/client";
 import { Dashboard } from "./pages/Dashboard";
 import { CompanyDetail } from "./pages/CompanyDetail";
 import { CanaryStatus } from "./pages/CanaryStatus";
@@ -14,6 +15,11 @@ export function App() {
           </svg>
           canarynet
         </Link>
+        {USE_MOCK && (
+          <span className="mock-badge" title="VITE_USE_MOCK is not set to false - showing fixture data, not the real API">
+            MOCK DATA
+          </span>
+        )}
       </div>
       <Routes>
         <Route path="/" element={<Dashboard />} />

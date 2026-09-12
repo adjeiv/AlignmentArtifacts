@@ -6,21 +6,22 @@ AI safety auditing tool - see `CLAUDE.md` for the architecture and
 ## Run everything together
 
 ```bash
-cp .env.example .env   # then fill in ANTHROPIC_API_KEY
-docker compose up --build
+make install   # one-time: uv sync + npm install
+make up        # backend (http://localhost:8000) + frontend (http://localhost:5173)
 ```
 
-- Frontend: http://localhost:8080 (talks to the real backend, not the mock data)
-- Backend: http://localhost:8000
+No API key needed - `rfc/agents.py` calls Claude via the `claude` CLI, which
+authenticates however it's already logged in on this machine. Viewing a
+task's canary instances for the first time runs the real prediction +
+artifact-generation pipeline, which can take a while (see CLAUDE.md).
 
-`ANTHROPIC_API_KEY` is required - `rfc/agents.py` calls the real Anthropic
-API (not mocked) whenever the frontend asks for a task's canary instances,
-which costs real tokens/time. See `frontend/README.md` to instead run just
-the frontend against its built-in mock data.
+`make up` runs both in the foreground; Ctrl+C stops both. `make backend` /
+`make frontend` run just one half - see `frontend/README.md` to instead run
+the frontend against its built-in mock data (no backend needed at all).
 
-## Backend only, locally (no Docker)
+## Backend only
 
 ```bash
-uv run python main.py        # http://localhost:8000
-uv run pytest                # backend test suite
+uv run python main.py   # http://localhost:8000
+uv run pytest            # backend test suite
 ```

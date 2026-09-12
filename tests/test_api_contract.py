@@ -5,8 +5,8 @@ This is not exhaustive - it's a floor to catch a route/field disappearing or
 changing shape without CONTRACT.md (and this suite) being updated to match,
 per CLAUDE.md.
 
-Never calls the real Anthropic API: rfc.agents.generate_all is monkeypatched
-wherever a route depends on it.
+Never calls the real `claude` CLI: rfc.agents.ensure_pipeline_started is
+monkeypatched wherever a route depends on it.
 """
 
 from fastapi.testclient import TestClient
@@ -21,8 +21,10 @@ KNOWN_COMPANY_ID = "1"
 KNOWN_TASK_ID = "1"
 
 
-def _fake_canary_instances(task, company, canary_types):
-    return [
+def _fake_ensure_pipeline_started(task, company, canary_types, ioms, on_instance_ready):
+    # Synchronous stand-in for the real (backgrounded) pipeline: calls the
+    # callback immediately instead of spawning a thread that calls it later.
+    on_instance_ready(
         CanaryInstance(
             id="test-ci-1",
             canary_type_id=canary_types[0].id,
@@ -30,7 +32,7 @@ def _fake_canary_instances(task, company, canary_types):
             iom_ids=[],
             deployment_health="pending",
         )
-    ]
+    )
 
 
 # --- Companies -------------------------------------------------------------
@@ -100,11 +102,11 @@ def test_get_task_404_for_unknown_id():
     assert res.status_code == 404
 
 
-# --- Canary instances (generate_all is mocked - no live Anthropic calls) ---
+# --- Canary instances (ensure_pipeline_started is mocked - no live claude CLI calls) ---
 
 
 def test_list_task_canary_instances_shape(monkeypatch):
-    monkeypatch.setattr("rfc.api.generate_all", _fake_canary_instances)
+    monkeypatch.setattr("rfc.api.ensure_pipeline_started", _fake_ensure_pipeline_started)
 
     res = client.get(f"/api/tasks/{KNOWN_TASK_ID}/canary-instances")
     assert res.status_code == 200
@@ -129,12 +131,12 @@ def test_list_task_canary_instances_shape(monkeypatch):
 
 
 def test_generated_canary_instances_are_synced_into_the_store(monkeypatch):
-    monkeypatch.setattr("rfc.api.generate_all", _fake_canary_instances)
+    monkeypatch.setattr("rfc.api.ensure_pipeline_started", _fake_ensure_pipeline_started)
 
     list_res = client.get(f"/api/tasks/{KNOWN_TASK_ID}/canary-instances")
     instance_id = list_res.json()[0]["id"]
 
-    # api.py documents syncing generate_all's output into data.canary_instances
+    # _register_canary_instance lands the pipeline's output in data.canary_instances
     # so these two routes can find it afterwards - verify that actually holds.
     detail_res = client.get(f"/api/canary-instances/{instance_id}")
     assert detail_res.status_code == 200

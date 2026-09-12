@@ -94,3 +94,16 @@ UI has something to poll against before the real pipeline exists.
 3. Should `IOM.linked_canary_type_ids` containing `""` (see IOM id `"2"` in
    `data.py`) be treated as "no canary type covers this yet", or is that a
    data bug to clean up?
+4. ~~`GET /api/tasks/{id}/canary-instances` runs the pipeline
+   synchronously~~ - fixed: `rfc.agents.ensure_pipeline_started` runs it in
+   a background thread and the route always returns immediately. Still
+   true on a cold task: the whole prediction call resolves at once
+   (~80-100s observed), so all of a task's canaries currently appear
+   together rather than trickling in one at a time - not per-canary
+   incremental yet, just non-blocking.
+5. There's still no `Task.deployment_health` transition anywhere -
+   generated instances stay `"pending"` forever (no deploy step exists).
+   The frontend's polling is built to keep polling while anything is
+   `"pending"`, capped at `MAX_POLL_TICKS`, so this currently means every
+   real task's canaries poll for the full cap and then just stay showing
+   "pending" rather than settling to `"active"`.

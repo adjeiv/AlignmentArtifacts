@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 
 import data
 from rfc.models import CanaryInstance, ComplianceStatus
-from rfc.agents import generate_all
+from rfc.agents import ensure_pipeline_started
 
 app = FastAPI(title="Alignment Artifacts API")
 
@@ -114,26 +114,37 @@ def get_task(task_id: str) -> data.Task:
     return _task_or_404(task_id)
 
 
+def _register_canary_instance(instance: CanaryInstance) -> None:
+    """
+    ensure_pipeline_started's on_instance_ready callback: lands a newly
+    generated instance in the shared data store as soon as it exists (called
+    from the background pipeline thread, possibly well after the request
+    that triggered it has already returned) so the next poll of this route -
+    or GET /api/canary-instances/{id} - can find it.
+    """
+    if not any(ci.id == instance.id for ci in data.canary_instances):
+        data.canary_instances.append(instance)
+
+
 @app.get("/api/tasks/{task_id}/canary-instances")
 def list_task_canary_instances(task_id: str) -> list[CanaryInstance]:
     task = _task_or_404(task_id)
     company = _company_or_404(task.company_id)
-    instances = generate_all(task=task, company=company, canary_types=data.canary_types)
 
-    # generate_all/save_predicted_canary_instances doesn't know about the
-    # app's data store, so instances it creates never land in
-    # data.canary_instances - meaning GET /api/canary-instances/{id} (and
-    # its /events route) can't find them. Sync them in here, since this is
-    # the endpoint frontend polls that actually discovers new instances.
-    known_ids = {ci.id for ci in data.canary_instances}
-    for instance in instances:
-        if not instance.task_id:
-            instance.task_id = task.id
-        if instance.id not in known_ids:
-            data.canary_instances.append(instance)
-            known_ids.add(instance.id)
+    # Never blocks: starts the (slow, real `claude` CLI) pipeline in the
+    # background at most once per task, and this route always just returns
+    # whatever's landed in the store so far - which is how the frontend's
+    # polling is built to see canaries "arrive" as they're generated
+    # (see frontend/CONTRACT.md's task-creation-pipeline section).
+    ensure_pipeline_started(
+        task=task,
+        company=company,
+        canary_types=data.canary_types,
+        ioms=data.ioms,
+        on_instance_ready=_register_canary_instance,
+    )
 
-    return instances
+    return [ci for ci in data.canary_instances if ci.task_id == task_id]
 
 # --- Canary instances ------------------------------------------------------
 

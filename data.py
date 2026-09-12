@@ -49,16 +49,19 @@ tasks = [
         id="1",
         company_id="1",
         prompt="RAG on company data",
+        iom_ids=["6", "7", "8"],
     ),
     Task(
         id="2",
         company_id="1",
         prompt="Generate code output",
+        iom_ids=["1", "3", "5"],
     ),
     Task(
         id="3",
         company_id="1",
         prompt="Solve exam",
+        iom_ids=["3", "4"],
     )
 ]
 
@@ -108,10 +111,10 @@ ioms = [
     IOM(id="8", name="Unauthorised internet access", linked_canary_type_ids=["1"]),
 ]
 
-# TODO: rfc/agents.py's save_predicted_canary_instances() doesn't populate
-# task_id/iom_ids/deployment_health/etc. on the CanaryInstance it creates -
-# needs a task_id (and ideally iom_ids) parameter threaded through from the
-# caller before agent-predicted canaries are usable by the API/frontend.
+# TODO: instances agents.py generates always stay deployment_health="pending"
+# forever - there's no deploy step that ever flips them to "active". task_id
+# is patched on in rfc/api.py (not set at the source in agents.py); iom_ids
+# is now set at the source (see rfc.agents.save_predicted_canary_instances).
 canary_instances: list[CanaryInstance] = []
 
 canary_events: list[CanaryEvent] = []
