@@ -342,6 +342,11 @@ def test_deploy_static_site_plants_env_and_registers_env_endpoint(tmp_path, monk
     endpoints = json.loads((tmp_path / "endpoints.json").read_text())[domain]["endpoints"]
     assert {"iom_id": "1", "path_regex": r"^/\.env$"} in endpoints
 
+    assert instance.metadata["planted_credentials"] == [
+        {"AWS_ACCESS_KEY_ID": "AKIAFAKE", "AWS_SECRET_ACCESS_KEY": "fakesecret", "AWS_DEFAULT_REGION": "us-east-1"},
+        {"INTERNAL_HEALTHCHECK_URL": "https://canarytokens.org/some/path"},
+    ]
+
     from backend.thinkst import _thinkst_tokens
 
     assert {"token": "tok-aws", "auth": "auth-aws", "instance_id": instance.id, "iom_id": "1", "reported": False} in _thinkst_tokens

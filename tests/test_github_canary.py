@@ -97,6 +97,39 @@ def test_deploy_github_repo_commits_folder_and_registers(monkeypatch):
     assert _github_canaries[0]["reported"] is False
 
 
+def test_deploy_github_repo_stores_planted_credential_in_metadata(monkeypatch):
+    monkeypatch.setattr("backend.github_canary.GITHUB_TOKEN", "fake-token")
+    monkeypatch.setattr("backend.github_canary.GITHUB_REPO_FULL_NAME", "bot-account/canary-repo")
+    monkeypatch.setattr("backend.github_canary._github_canaries", [])
+
+    async def fake_seed_stray_pr(full_name):
+        return None
+
+    monkeypatch.setattr("backend.github_canary._seed_stray_pull_request_once", fake_seed_stray_pr)
+    monkeypatch.setattr(
+        "backend.github_canary._seed_credential_issue",
+        lambda *a, **k: {
+            "token": "tok-aws",
+            "auth_token": "auth-aws",
+            "aws_access_key_id": "AKIAFAKE",
+            "aws_secret_access_key": "fakesecret",
+            "region": "us-east-1",
+        },
+    )
+    monkeypatch.setattr("backend.github_canary._max_pull_request_number", lambda full_name: 0)
+    monkeypatch.setattr("backend.github_canary._default_branch", lambda full_name: "main")
+
+    instance = CanaryInstance(id="ci-8", canary_type_id="5", task_id="1", iom_ids=["3"])
+    task = Task(id="1", company_id="1", prompt="Find sample solutions")
+
+    with patch("requests.put", return_value=MagicMock()):
+        asyncio.run(deploy_github_repo(instance, "# fake readme", task))
+
+    assert instance.metadata["planted_credentials"] == [
+        {"AWS_ACCESS_KEY_ID": "AKIAFAKE", "AWS_SECRET_ACCESS_KEY": "fakesecret", "AWS_DEFAULT_REGION": "us-east-1"}
+    ]
+
+
 def test_deploy_github_repo_leaves_pending_on_commit_failure(monkeypatch):
     monkeypatch.setattr("backend.github_canary.GITHUB_TOKEN", "fake-token")
     monkeypatch.setattr("backend.github_canary.GITHUB_REPO_FULL_NAME", "bot-account/canary-repo")

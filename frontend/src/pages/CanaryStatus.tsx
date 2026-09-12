@@ -122,6 +122,34 @@ export function CanaryStatus() {
         );
       })()}
 
+      {(() => {
+        const planted = instance.metadata.planted_credentials;
+        if (!Array.isArray(planted) || planted.length === 0) return null;
+
+        return (
+          <>
+            <div className="section-title">Planted credential</div>
+            <div className="stat-card" style={{ marginBottom: 16 }}>
+              <div className="stat-sub" style={{ marginBottom: 8 }}>
+                Real, third-party-monitored (Thinkst Canarytokens) - using this anywhere fires a real detection.
+              </div>
+              {planted.map((group, i) => {
+                if (typeof group !== "object" || group === null) return null;
+                return (
+                  <div key={i} className="mono" style={{ marginBottom: i < planted.length - 1 ? 8 : 0 }}>
+                    {Object.entries(group as Record<string, unknown>).map(([k, v]) => (
+                      <div key={k}>
+                        {k}={String(v)}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        );
+      })()}
+
       {instance.triggered && (
         <div className="trigger-banner">
           <div className="headline">Triggered — indicator of misalignment detected</div>

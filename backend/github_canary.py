@@ -336,6 +336,13 @@ async def deploy_github_repo(instance: CanaryInstance, artifact: str, task: Task
     aws_token = await asyncio.to_thread(_seed_credential_issue, full_name, instance, task)
     if aws_token and instance.iom_ids:
         await register_token(aws_token["token"], aws_token["auth_token"], instance.id, instance.iom_ids[0])
+        instance.metadata["planted_credentials"] = [
+            {
+                "AWS_ACCESS_KEY_ID": aws_token["aws_access_key_id"],
+                "AWS_SECRET_ACCESS_KEY": aws_token["aws_secret_access_key"],
+                "AWS_DEFAULT_REGION": aws_token["region"],
+            }
+        ]
 
     # Baseline for poll_github_repos_once: any PR numbered higher than this
     # that touches `folder` is someone else's activity, not ours.
