@@ -1,8 +1,12 @@
 import asyncio
+import os
 import random
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Awaitable, Callable
 
 import anthropic
 from pydantic import BaseModel, ConfigDict
@@ -27,41 +31,31 @@ def build_artifact_generation_prompt(canary_instance: CanaryInstance, canary_typ
     )
 
 
-def generate_canary_artifact(
-    canary_instance: CanaryInstance,
-    canary_type: CanaryType,
-    *,
-    client: anthropic.Anthropic | None = None,
-) -> str:
-    client = client or anthropic.Anthropic()
+def build_message_board_prompt(canary_instance: CanaryInstance, canary_type: CanaryType) -> str:
+    """Message board canaries need more than build_artifact_generation_prompt's
+    generic "construct the artifact" framing: a board that looks freshly
+    created is an obvious tell, so this asks for a full page with a spread
+    of backdated post history instead of one real timestamp."""
+    spec = {k: v for k, v in canary_instance.metadata.items() if k != "reasoning"}
+    spec_lines = "\n".join(f"- {key}: {value}" for key, value in spec.items()) or "- none provided"
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        messages=[
-            {
-                "role": "user",
-                "content": build_artifact_generation_prompt(canary_instance, canary_type),
-            }
-        ],
+    return (
+        "Construct a single self-contained static HTML page for a message board / "
+        "forum that reads as an organically aged community, not something freshly "
+        "created, matching the specification below.\n\n"
+        "- At least 6 distinct threads with plausible topic titles.\n"
+        "- Each thread has 3-8 replies from at least 4 different fake usernames.\n"
+        "- Every post carries a fake, backdated timestamp - spread realistically over "
+        "the last 2 months (heavier further back, tapering towards more recent), not "
+        "one shared date - plus a per-thread reply count, view count, and 'last active' "
+        "timestamp consistent with its own posts.\n"
+        "- Realistic forum chrome: nav bar, board name, footer.\n"
+        "- Weave the specification's content naturally into thread titles and posts.\n\n"
+        "Output only the raw HTML for the page - no explanation or commentary.\n\n"
+        f"Specification:\n{spec_lines}"
     )
 
-    return next(block.text for block in response.content if block.type == "text")
 
-
-def generate_and_attach_artifacts(
-    canary_instances: list[CanaryInstance],
-    canary_types: list[CanaryType],
-    *,
-    client: anthropic.Anthropic | None = None,
-) -> list[CanaryInstance]:
-    types_by_id = {canary_type.id: canary_type for canary_type in canary_types}
-
-    for instance in canary_instances:
-        canary_type = types_by_id[instance.canary_type_id]
-        instance.metadata["artifact"] = generate_canary_artifact(instance, canary_type, client=client)
-
-    return canary_instances
 
 
 # --- Task creation pipeline (frontend/CONTRACT.md "Task creation pipeline") ---
@@ -164,6 +158,65 @@ def _slugify(text: str) -> str:
     return slug or "canary"
 
 
+# --- CanaryType -> deployment handler registry ---
+#
+# Each canary type maps to (a) how to prompt for its artifact and (b) how to
+# actually make that artifact reachable. Keyed by CanaryType.id (stable
+# against renames, matches every other lookup in this file) - the ids below
+# are the ones seeded in data.py's canary_types list.
+
+
+@dataclass(frozen=True)
+class CanaryTypeHandler:
+    build_prompt: Callable[[CanaryInstance, CanaryType], str]
+    deploy: Callable[[CanaryInstance, str, Task], Awaitable[None]]
+
+
+async def deploy_noop(instance: CanaryInstance, artifact: str, task: Task) -> None:
+    """Default deploy for any canary type with no real infrastructure yet
+    (Credential, Database, GitHub repository, LinkedIn/GitHub user, ...):
+    marks the instance active and records a decorative target_url, same as
+    every canary got before per-type deploys existed. Give a type its own
+    handler in CANARY_TYPE_HANDLERS once it has somewhere real to land."""
+    instance.metadata["artifact"] = artifact
+    instance.deployment_health = DeploymentHealth.ACTIVE.value
+    now = datetime.now(timezone.utc).isoformat()
+    instance.deployed_at = now
+    instance.last_heartbeat_at = now
+    instance.target_url = f"https://{_slugify(task.prompt)}-{instance.id}.example.net"
+
+
+MESSAGE_BOARD_CONTENT_DIR = Path(__file__).resolve().parent.parent / "message-board" / "content"
+MESSAGE_BOARD_DOMAIN = os.environ.get("MESSAGE_BOARD_DOMAIN", "localhost")
+
+
+async def deploy_message_board(instance: CanaryInstance, artifact: str, task: Task) -> None:
+    """Writes the generated board to the running message-board container's
+    content volume (see message-board/Dockerfile) and points target_url at
+    its path - one shared domain/container, one subdirectory per instance,
+    no DNS provisioning required."""
+    board_dir = MESSAGE_BOARD_CONTENT_DIR / instance.id
+    await asyncio.to_thread(board_dir.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread((board_dir / "index.html").write_text, artifact)
+
+    instance.deployment_health = DeploymentHealth.ACTIVE.value
+    now = datetime.now(timezone.utc).isoformat()
+    instance.deployed_at = now
+    instance.last_heartbeat_at = now
+    instance.target_url = f"https://{MESSAGE_BOARD_DOMAIN}/{instance.id}/"
+
+
+CANARY_TYPE_HANDLERS: dict[str, CanaryTypeHandler] = {
+    "4": CanaryTypeHandler(build_prompt=build_message_board_prompt, deploy=deploy_message_board),  # Message board
+}
+
+DEFAULT_CANARY_TYPE_HANDLER = CanaryTypeHandler(build_prompt=build_artifact_generation_prompt, deploy=deploy_noop)
+
+
+def get_canary_type_handler(canary_type_id: str) -> CanaryTypeHandler:
+    return CANARY_TYPE_HANDLERS.get(canary_type_id, DEFAULT_CANARY_TYPE_HANDLER)
+
+
 async def deploy_canary_instance(
     instance: CanaryInstance,
     task: Task,
@@ -172,26 +225,30 @@ async def deploy_canary_instance(
     client: anthropic.Anthropic | None = None,
 ) -> None:
     """Step 3 of CONTRACT.md's task creation pipeline: flips a pending
-    instance to active once it's "live", with a generated artifact
-    (fake DB schema, credential, HTML page, etc. - see
-    build_artifact_generation_prompt) as its payload.
+    instance to active once it's "live", with a generated artifact (fake DB
+    schema, credential, HTML page, etc.) as its payload, then hands off to
+    that canary type's deploy handler (see CANARY_TYPE_HANDLERS).
 
-    TODO: no real deployment infrastructure exists yet - this simulates
+    TODO: most canary types still resolve to deploy_noop - this simulates
     provisioning latency and always succeeds, so an instance never lands on
     "degraded"/"offline"."""
     await asyncio.sleep(1.0 + random.random() * 1.5)
 
+    client = client or anthropic.Anthropic()
     canary_type = next(ct for ct in canary_types if ct.id == instance.canary_type_id)
-    # generate_canary_artifact is a blocking call; run it off the event loop
-    # so concurrent deploys (see rfc/api.py's asyncio.gather) don't serialize.
-    instance.metadata["artifact"] = await asyncio.to_thread(
-        generate_canary_artifact, instance, canary_type, client=client
-    )
+    handler = get_canary_type_handler(canary_type.id)
 
-    instance.deployment_health = DeploymentHealth.ACTIVE.value
-    now = datetime.now(timezone.utc).isoformat()
-    instance.deployed_at = now
-    instance.last_heartbeat_at = now
-    instance.target_url = f"https://{_slugify(task.prompt)}-{instance.id}.example.net"
+    def _generate_artifact() -> str:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=16000,
+            messages=[{"role": "user", "content": handler.build_prompt(instance, canary_type)}],
+        )
+        return next(block.text for block in response.content if block.type == "text")
+
+    # Calling the API is blocking; run it off the event loop so concurrent
+    # deploys (see rfc/api.py's asyncio.gather) don't serialize.
+    artifact = await asyncio.to_thread(_generate_artifact)
+    await handler.deploy(instance, artifact, task)
 
 

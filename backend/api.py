@@ -109,11 +109,10 @@ def list_company_tasks(company_id: str) -> list[data.Task]:
     return [t for t in data.tasks if t.company_id == company_id]
 
 
-async def _generate_and_deploy_canaries(task: data.Task) -> None:
-    """Steps 2-3 of CONTRACT.md's task creation pipeline, run as a background
-    task so POST /api/companies/{company_id}/tasks doesn't block on it."""
-    instances = spawn_canary_instances_for_task(task, data.ioms, data.canary_types)
-    data.canary_instances.extend(instances)
+async def _deploy_canaries(task: data.Task, instances: list[CanaryInstance]) -> None:
+    """Step 3 of CONTRACT.md's task creation pipeline, run as a background
+    task so POST /api/companies/{company_id}/tasks doesn't block on it - this
+    is the only part that makes Claude calls, so it's the only part backgrounded."""
     await asyncio.gather(
         *(deploy_canary_instance(ci, task, data.canary_types) for ci in instances)
     )
@@ -131,7 +130,14 @@ def create_task(
     task.iom_ids = classify_task_ioms(task, data.ioms)
     data.tasks.append(task)
 
-    background_tasks.add_task(_generate_and_deploy_canaries, task)
+    # Step 2 (spawning) also runs synchronously - it's pure computation, no
+    # API calls - so GET .../canary-instances is guaranteed non-empty by the
+    # time the caller has this response, and an empty list there always means
+    # "genuinely no canary coverage", never "hasn't been spawned yet".
+    instances = spawn_canary_instances_for_task(task, data.ioms, data.canary_types)
+    data.canary_instances.extend(instances)
+
+    background_tasks.add_task(_deploy_canaries, task, instances)
     return task
 
 
