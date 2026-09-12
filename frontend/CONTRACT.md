@@ -5,11 +5,9 @@ please push back on anything that doesn't fit the backend's plans.
 
 ## Data model
 
-`rfc/models.py` is untouched. The frontend's proposed additions live in
-**`rfc/frontend_models.py`**, which subclasses `Task` and `CanaryInstance`
-from `models.py` and adds fields (all with defaults, so nothing existing
-breaks) rather than editing the shared file directly - review it there and
-fold whatever you're happy with back into `models.py` when it's settled:
+The frontend's fields have been folded into `rfc/models.py` directly (there's
+no longer a separate `rfc/frontend_models.py` - that file's proposed
+extensions are now the real `Task` and `CanaryInstance` dataclasses):
 
 - `Task.iom_ids: list[str]` - the IOMs this task has been mapped to. Drives
   the mind-map view's branches.
@@ -17,18 +15,19 @@ fold whatever you're happy with back into `models.py` when it's settled:
   `.triggered_iom_id`, `.deployed_at`, `.last_heartbeat_at`, `.target_url`.
   A canary instance is deployed against one task and covers detection for a
   subset of that task's `iom_ids`.
-- New `CanaryEvent` dataclass - the log/trigger stream for one canary
+- `CanaryEvent` dataclass - the log/trigger stream for one canary
   instance. A `level == "trigger"` event is what flips
   `CanaryInstance.triggered` and names the detected `iom_id`.
-- New enums (`ComplianceStatus`, `DeploymentHealth`, `LogLevel`) - plain
-  `str` enums so they serialize as normal strings.
-- `Company.compliance_status` (unchanged field on the base `Company`) is
-  expected to hold one of `ComplianceStatus`'s values, computed from
-  whether any canary covering the company's tasks has triggered - not a
-  certification label like the current mock value ("SOC2 compliant").
+- `ComplianceStatus`, `DeploymentHealth`, `LogLevel` enums - plain `str`
+  enums so they serialize as normal strings.
+- `Company.compliance_status` is expected to hold one of `ComplianceStatus`'s
+  values, computed from whether any canary covering the company's tasks has
+  triggered - not a certification label like the old mock value ("SOC2
+  compliant"). The API computes this per-request rather than trusting the
+  stored field (see `rfc/api.py`).
 
-`frontend/src/types/contract.ts` mirrors `rfc/frontend_models.py` 1:1 for
-the frontend; the Python dataclasses are canonical.
+`frontend/src/types/contract.ts` mirrors `rfc/models.py` 1:1 for the
+frontend; the Python dataclasses are canonical.
 
 ## Derivation rule (frontend assumes this; flag if backend disagrees)
 
