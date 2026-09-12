@@ -13,6 +13,7 @@ class Company:
     name: str
     domains: list[str] = field(default_factory=list)
     task_ids: list[str] = field(default_factory=list)
+    compliance_status: str = field(default_factory=str)
 
 
 @dataclass
