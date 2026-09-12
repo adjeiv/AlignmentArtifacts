@@ -6,16 +6,35 @@ and backend/models.py.
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
 import data
-from backend.models import CanaryEvent, CanaryInstance, ComplianceStatus, LogLevel
-from backend.agents import classify_task_ioms, deploy_canary_instance, spawn_canary_instances_for_task
+from backend.models import CanaryInstance, ComplianceStatus
+from backend.agents import (
+    classify_task_ioms,
+    deploy_canary_instance,
+    run_thinkst_poller,
+    spawn_canary_instances_for_task,
+)
+from backend.agents import trigger_canary_instance as _trigger_canary_instance
 
-app = FastAPI(title="Alignment Artifacts API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # No-ops immediately if THINKST_ALERT_EMAIL isn't set (see
+    # backend/agents.py's run_thinkst_poller) - polls canarytokens.org's
+    # /history for planted credentials (deploy_static_site's .env) actually
+    # being used, a detection path log-monitor/ can't cover since that's
+    # outbound (AWS API calls, webhook fetches), not a hit on our own nginx.
+    poller = asyncio.create_task(run_thinkst_poller(data.canary_instances))
+    yield
+    poller.cancel()
+
+
+app = FastAPI(title="Alignment Artifacts API", lifespan=lifespan)
 
 
 class CreateTaskRequest(BaseModel):
@@ -185,35 +204,20 @@ def list_canary_instance_events(canary_instance_id: str) -> list[data.CanaryEven
 
 
 @app.post("/api/canary-instances/{canary_instance_id}/trigger/{iom_id}")
-def trigger_canary_instance(canary_instance_id: str, iom_id: str) -> CanaryInstance:
+def trigger_canary_instance_route(canary_instance_id: str, iom_id: str) -> CanaryInstance:
     """Called by log-monitor/monitor.py when a request matches one of this
     instance's registered endpoint regexes (see backend/agents.py's
-    _register_endpoints). Flips triggered/triggered_iom_id and logs a TRIGGER
-    CanaryEvent - Company.compliance_status is computed live from these on
+    _register_endpoints) - the actual mutation is shared with
+    poll_thinkst_tokens_once (backend/agents.py's trigger_canary_instance),
+    since both a nginx-log hit and a Thinkst-detected credential use trigger
+    the same way. Company.compliance_status is computed live from these on
     every read (_compliance_status_for below), so nothing else needs to be
     told about the hit."""
     instance = _canary_instance_or_404(canary_instance_id)
-    if iom_id not in instance.iom_ids:
-        raise HTTPException(
-            status_code=400,
-            detail=f"IOM {iom_id!r} is not covered by canary instance {canary_instance_id!r}",
-        )
-
-    now = datetime.now(timezone.utc).isoformat()
-    instance.triggered = True
-    instance.triggered_iom_id = iom_id
-    instance.last_heartbeat_at = now
-
-    data.canary_events.append(
-        CanaryEvent(
-            id=str(uuid.uuid4()),
-            canary_instance_id=instance.id,
-            timestamp=now,
-            level=LogLevel.TRIGGER.value,
-            message=f"Canary endpoint hit - IOM {iom_id!r} detected",
-            iom_id=iom_id,
-        )
-    )
+    try:
+        _trigger_canary_instance(instance, iom_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return instance
 
 

@@ -8,13 +8,13 @@
 docker compose up --build
 ```
 
-Starts all four services (backend, static-site, dns-resolver, frontend)
-wired together via `docker-compose.yml`, sharing a `canary-content` volume so
-canaries `deploy_static_site` writes in the backend container immediately
-show up served by the static-site container. Frontend on
-`http://localhost:5173`, backend on `http://localhost:8000`. See "Custom
-domains for canaries" below before expecting a canary's `target_url` to
-actually load.
+Starts all five services (backend, static-site, dns-resolver, log-monitor,
+frontend) wired together via `docker-compose.yml`, sharing a
+`canary-content` volume so canaries `deploy_static_site` writes in the
+backend container immediately show up served by the static-site container.
+Frontend on `http://localhost:5173`, backend on `http://localhost:8000`. See
+"Custom domains for canaries" below before expecting a canary's
+`target_url` to actually load.
 
 No API key to set - like the manual backend below, the containerized backend
 calls Claude via the `claude` CLI (see CLAUDE.md), so it needs `claude`
@@ -121,6 +121,34 @@ make dns-restore
 
 `make ca-untrust` reverses the CA trust the same way, if you want that gone
 too.
+
+### Real credential canaries (Thinkst Canarytokens)
+
+Every deployed static-site canary also gets a `.env` file
+(`_plant_fake_env` in `backend/agents.py`) alongside its `index.html`, with
+real, third-party-monitored credentials spliced in via
+[canarytokens.org](https://docs.canarytokens.org/guide/)'s free public API
+(Thinkst's open-source Canarytokens project) - an AWS key pair and a plain
+URL today. Unlike everything else in this repo, *using* one of these (an
+actual AWS API call, a fetch of the planted URL) is detected by Thinkst's
+infrastructure, not ours - `backend/agents.py`'s `run_thinkst_poller`
+periodically asks canarytokens.org whether a planted token has fired and
+triggers the same way a `log-monitor` hit does.
+
+This is opt-in and off by default - **set `THINKST_ALERT_EMAIL`** to an
+email address you actually control before starting the backend:
+
+```bash
+export THINKST_ALERT_EMAIL=you@example.com
+uv run main.py
+```
+
+Without it, `.env` planting silently no-ops (same pattern as `deploy_noop`
+for canary types with nothing real configured yet) - deploys still succeed,
+just without a `.env`. Thinkst requires an email or webhook per token even
+though this integration only ever polls `/history` itself and never relies
+on that channel actually firing, so expect Thinkst's own alert emails to
+land in that inbox too when a token fires.
 
 ### Local-only caveats
 

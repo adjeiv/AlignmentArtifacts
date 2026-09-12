@@ -8,6 +8,9 @@ services:
       STATIC_SITE_IP: 127.0.0.1
       DNS_ZONES_FILE: /dns-zones/zones.json
       ENDPOINTS_FILE: /canary-endpoints/endpoints.json
+      # Opt-in - unset means .env planting silently no-ops (see README.md
+      # "Real credential canaries"). Must be an email you actually control.
+      THINKST_ALERT_EMAIL: ${THINKST_ALERT_EMAIL:-}
     volumes:
       - canary-content:/canary-content
       - dns-zones:/dns-zones

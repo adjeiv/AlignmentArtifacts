@@ -40,6 +40,18 @@ them, and a dashboard reports compliance status.
   `triggered`/`triggered_iom_id` and logs a `CanaryEvent`.
   `Company.compliance_status` is computed live from `triggered` on every
   read, so nothing else needs telling about a hit.
+- Real credential canaries: `deploy_static_site` also plants a `.env` file
+  (`_plant_fake_env`) containing real Thinkst Canarytokens
+  (canarytokens.org's free public API - see `_create_canarytoken`), and
+  registers `/.env` as one of the instance's endpoint regexes. This needs
+  `THINKST_ALERT_EMAIL` set (some email you control - Thinkst requires one
+  per token even though we only ever poll, never rely on it firing);
+  unset means it silently no-ops. `run_thinkst_poller`, started from
+  `backend/api.py`'s app `lifespan`, polls each planted token's
+  `/history` every `THINKST_POLL_INTERVAL_SECONDS` (default 30s) and
+  calls the same `trigger_canary_instance` as the nginx-log path - this
+  is a separate detection mechanism because credential *use* is outbound
+  (an AWS API call, a webhook fetch), not a request to our own nginx.
 - Tasks seeded in `data.py` (ids "1"-"3") predate this pipeline - they have
   `iom_ids` but no `canary_instances`, so they show as coverage gaps until
   someone creates a new task through the UI.

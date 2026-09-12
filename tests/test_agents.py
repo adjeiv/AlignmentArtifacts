@@ -7,22 +7,26 @@ invokes it.
 import asyncio
 import json
 import re
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+import data
 from backend.agents import (
     CANARY_TYPE_HANDLERS,
     ClaudeCLIError,
     IomMapping,
     _canary_domain,
     _canary_endpoint_regex,
+    _create_canarytoken,
     classify_task_ioms,
     deploy_canary_instance,
     deploy_static_site,
     get_canary_type_handler,
+    poll_thinkst_tokens_once,
     run_claude,
     spawn_canary_instances_for_task,
+    trigger_canary_instance,
     valid_canary_type_ids,
 )
 from backend.models import CanaryInstance, CanaryType, IOM, Task
@@ -255,3 +259,113 @@ def test_deploy_static_site_registers_one_endpoint_entry_per_iom(tmp_path, monke
     zones = json.loads(endpoints_file.read_text())
     assert zones[domain]["instance_id"] == instance.id
     assert zones[domain]["endpoints"] == [{"iom_id": "3", "path_regex": _canary_endpoint_regex("2")}]
+
+
+# --- trigger_canary_instance (shared mutation) ------------------------------
+
+
+def test_trigger_canary_instance_sets_fields_and_logs_event():
+    instance = CanaryInstance(id="ci-1", canary_type_id="1", task_id="1", iom_ids=["8"])
+    before = len(data.canary_events)
+
+    trigger_canary_instance(instance, "8")
+
+    assert instance.triggered is True
+    assert instance.triggered_iom_id == "8"
+    assert len(data.canary_events) == before + 1
+    assert data.canary_events[-1].level == "trigger"
+    assert data.canary_events[-1].iom_id == "8"
+
+
+def test_trigger_canary_instance_rejects_iom_not_covered():
+    instance = CanaryInstance(id="ci-2", canary_type_id="1", task_id="1", iom_ids=["8"])
+    with pytest.raises(ValueError):
+        trigger_canary_instance(instance, "not-covered")
+
+
+# --- Thinkst Canarytokens integration ---------------------------------------
+
+
+def test_create_canarytoken_noops_when_email_not_configured(monkeypatch):
+    monkeypatch.setattr("backend.agents.THINKST_ALERT_EMAIL", None)
+    with patch("requests.post") as mock_post:
+        assert _create_canarytoken("aws_keys", "memo") is None
+    mock_post.assert_not_called()
+
+
+def test_create_canarytoken_posts_generate_request(monkeypatch):
+    monkeypatch.setattr("backend.agents.THINKST_ALERT_EMAIL", "test@example.com")
+    fake_response = MagicMock()
+    fake_response.json.return_value = {
+        "token": "tok123",
+        "auth_token": "auth123",
+        "aws_access_key_id": "AKIAFAKE",
+        "aws_secret_access_key": "fakesecret",
+        "region": "us-east-1",
+    }
+    with patch("requests.post", return_value=fake_response) as mock_post:
+        result = _create_canarytoken("aws_keys", "some memo")
+
+    assert result["aws_access_key_id"] == "AKIAFAKE"
+    kwargs = mock_post.call_args.kwargs
+    assert kwargs["json"] == {"token_type": "aws_keys", "memo": "some memo", "email": "test@example.com"}
+
+
+def test_deploy_static_site_plants_env_and_registers_env_endpoint(tmp_path, monkeypatch):
+    content_dir = tmp_path / "content"
+    monkeypatch.setattr("backend.agents.STATIC_SITE_CONTENT_DIR", content_dir)
+    monkeypatch.setattr("backend.agents.DNS_ZONES_FILE", tmp_path / "zones.json")
+    monkeypatch.setattr("backend.agents.ENDPOINTS_FILE", tmp_path / "endpoints.json")
+    monkeypatch.setattr("backend.agents.STATIC_SITE_IP", "127.0.0.1")
+    monkeypatch.setattr("backend.agents.THINKST_ALERT_EMAIL", "test@example.com")
+    monkeypatch.setattr("backend.agents._thinkst_tokens", [])
+
+    aws_response = MagicMock()
+    aws_response.json.return_value = {
+        "token": "tok-aws",
+        "auth_token": "auth-aws",
+        "aws_access_key_id": "AKIAFAKE",
+        "aws_secret_access_key": "fakesecret",
+        "region": "us-east-1",
+    }
+    web_response = MagicMock()
+    web_response.json.return_value = {
+        "token": "tok-web",
+        "auth_token": "auth-web",
+        "token_url": "https://canarytokens.org/some/path",
+    }
+
+    instance = CanaryInstance(id="c9cc2a7e-ff82-4dcf-8c87-5bdce65e2133", canary_type_id="4", task_id="1", iom_ids=["1"])
+    task = Task(id="1", company_id="1", prompt="RAG over the support inbox")
+
+    with patch("requests.post", side_effect=[aws_response, web_response]):
+        asyncio.run(deploy_static_site(instance, "<html></html>", task))
+
+    domain = instance.metadata["domain"]
+    env_text = (content_dir / domain / ".env").read_text()
+    assert "AWS_ACCESS_KEY_ID=AKIAFAKE" in env_text
+    assert "AWS_SECRET_ACCESS_KEY=fakesecret" in env_text
+    assert "INTERNAL_HEALTHCHECK_URL=https://canarytokens.org/some/path" in env_text
+
+    endpoints = json.loads((tmp_path / "endpoints.json").read_text())[domain]["endpoints"]
+    assert {"iom_id": "1", "path_regex": r"^/\.env$"} in endpoints
+
+    from backend.agents import _thinkst_tokens
+
+    assert {"token": "tok-aws", "auth": "auth-aws", "instance_id": instance.id, "iom_id": "1", "reported": False} in _thinkst_tokens
+
+
+def test_poll_thinkst_tokens_once_triggers_on_a_hit(monkeypatch):
+    instance = CanaryInstance(id="ci-thinkst", canary_type_id="1", task_id="1", iom_ids=["4"])
+    entry = {"token": "tok", "auth": "auth", "instance_id": "ci-thinkst", "iom_id": "4", "reported": False}
+    monkeypatch.setattr("backend.agents._thinkst_tokens", [entry])
+
+    fired_response = MagicMock()
+    fired_response.json.return_value = {"history": {"hits": [{"time_of_hit": 123}]}}
+
+    with patch("requests.get", return_value=fired_response):
+        asyncio.run(poll_thinkst_tokens_once([instance]))
+
+    assert instance.triggered is True
+    assert instance.triggered_iom_id == "4"
+    assert entry["reported"] is True
