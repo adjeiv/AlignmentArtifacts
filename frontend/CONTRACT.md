@@ -82,7 +82,7 @@ only part that doesn't block the response):
 3. `deploy_canary_instance` per spawned instance - generates its artifact
    and flips it to `deployment_health: "active"` (see
    `backend/agents.py`'s `CANARY_TYPE_HANDLERS` - message board canaries get
-   a real deploy onto the `message-board/` container; everything else is
+   a real deploy onto the `static-site/` container; everything else is
    `deploy_noop`, which never produces `"degraded"`/`"offline"` yet).
 
 The frontend polls `GET /tasks/{task_id}/canary-instances` every second

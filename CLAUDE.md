@@ -23,10 +23,10 @@ them, and a dashboard reports compliance status.
   `BackgroundTasks` + `asyncio.gather`.
 - Canary types get their own deploy behavior via
   `CANARY_TYPE_HANDLERS` in `backend/agents.py` - most still resolve to
-  `deploy_noop` (marks active, decorative `target_url`), but the message
-  board type actually deploys: `deploy_message_board` writes the generated
-  HTML into `message-board/content/<instance-id>/`, served for real by the
-  Caddy container in `message-board/`.
+  `deploy_noop` (marks active, decorative `target_url`), but several canary
+  types actually deploy for real via `deploy_static_site`, which writes the
+  generated HTML into `static-site/content/<instance-id>/`, served by the
+  shared Caddy container in `static-site/`.
 - Tasks seeded in `data.py` (ids "1"-"3") predate this pipeline - they have
   `iom_ids` but no `canary_instances`, so they show as coverage gaps until
   someone creates a new task through the UI.

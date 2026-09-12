@@ -2,9 +2,24 @@
 
 ## Running locally
 
-Three processes, wired together. No cloud infra required for a working local demo.
+### Quickest: docker compose
 
-### 1. Backend
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+docker compose up --build
+```
+
+Starts all three services (backend, static-site, frontend) wired together
+via `docker-compose.yml`, sharing a `canary-content` volume so canaries
+`deploy_static_site` writes in the backend container immediately show up
+served by the static-site container. Frontend on `http://localhost:5173`,
+static-site on `https://localhost/`, backend on `http://localhost:8000`.
+
+### Manual: three separate processes
+
+Useful for iterating on one piece without rebuilding a container each time.
+
+#### 1. Backend
 
 Needs `ANTHROPIC_API_KEY` set (used by `classify_task_ioms` and
 `deploy_canary_instance` in `backend/agents.py`).
@@ -16,12 +31,12 @@ uv run main.py
 
 Serves on `http://localhost:8000`.
 
-### 2. Static site (Message board / Impersonation server / Fake answers canaries)
+#### 2. Static site (Message board / Impersonation server / Fake answers canaries)
 
 ```bash
-cd message-board
-docker build -t message-board .
-docker run -p 80:80 -p 443:443 -v "$(pwd)/content:/srv" message-board
+cd static-site
+docker build -t static-site .
+docker run -p 80:80 -p 443:443 -v "$(pwd)/content:/srv" static-site
 ```
 
 Serves on `https://localhost/`.
@@ -32,7 +47,7 @@ Dockerfile's `COPY content/ /srv/` only bakes in whatever existed at
 build are written to disk (see `deploy_static_site` in `backend/agents.py`)
 but never actually served.
 
-### 3. Frontend
+#### 3. Frontend
 
 ```bash
 cd frontend

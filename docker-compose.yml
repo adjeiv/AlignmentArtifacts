@@ -1,0 +1,38 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set}
+      STATIC_SITE_CONTENT_DIR: /canary-content
+      STATIC_SITE_DOMAIN: localhost
+    volumes:
+      - canary-content:/canary-content
+    ports:
+      - "8000:8000"
+
+  static-site:
+    build: ./static-site
+    environment:
+      DOMAIN: localhost
+    volumes:
+      - canary-content:/srv
+    ports:
+      - "80:80"
+      - "443:443"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_USE_MOCK: "false"
+    environment:
+      BACKEND_ORIGIN: http://backend:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  canary-content:

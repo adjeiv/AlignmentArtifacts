@@ -275,7 +275,12 @@ async def deploy_noop(instance: CanaryInstance, artifact: str, task: Task) -> No
     instance.target_url = f"https://{_slugify(task.prompt)}-{instance.id}.example.net"
 
 
-STATIC_SITE_CONTENT_DIR = Path(__file__).resolve().parent.parent / "message-board" / "content"
+_DEFAULT_STATIC_SITE_CONTENT_DIR = Path(__file__).resolve().parent.parent / "static-site" / "content"
+# Default assumes backend/ and static-site/ are sibling folders on the same
+# filesystem (true for local, non-Docker dev). Override when the backend runs
+# in its own container - see docker-compose.yml, which mounts a volume shared
+# with the static-site container instead.
+STATIC_SITE_CONTENT_DIR = Path(os.environ.get("STATIC_SITE_CONTENT_DIR", _DEFAULT_STATIC_SITE_CONTENT_DIR))
 STATIC_SITE_DOMAIN = os.environ.get("STATIC_SITE_DOMAIN", "localhost")
 
 
@@ -283,7 +288,7 @@ async def deploy_static_site(instance: CanaryInstance, artifact: str, task: Task
     """Shared deploy for every canary type whose artifact is just a static
     HTML page served over HTTPS (message board, impersonation server, fake
     answers page, ...): writes it to the running static-site container's
-    content volume (see message-board/Dockerfile) and points target_url at
+    content volume (see static-site/Dockerfile) and points target_url at
     its path - one shared domain/container, one subdirectory per instance,
     no DNS provisioning required."""
     site_dir = STATIC_SITE_CONTENT_DIR / instance.id
