@@ -24,9 +24,13 @@ them, and a dashboard reports compliance status.
 - Canary types get their own deploy behavior via
   `CANARY_TYPE_HANDLERS` in `backend/agents.py` - most still resolve to
   `deploy_noop` (marks active, decorative `target_url`), but several canary
-  types actually deploy for real via `deploy_static_site`, which writes the
-  generated HTML into `static-site/content/<instance-id>/`, served by the
-  shared Caddy container in `static-site/`.
+  types actually deploy for real via `deploy_static_site`, which gives the
+  instance its own domain (`<slug>-<id>.canary.test`), writes the generated
+  HTML into `static-site/content/<domain>/`, and registers the domain with
+  `dns-resolver/` so it resolves. Served by the shared nginx container in
+  `static-site/` (routes purely by Host header - see its `nginx.conf`), over
+  HTTP always and HTTPS if the local CA in `pki/` is trusted. See README.md
+  "Custom domains for canaries".
 - Tasks seeded in `data.py` (ids "1"-"3") predate this pipeline - they have
   `iom_ids` but no `canary_instances`, so they show as coverage gaps until
   someone creates a new task through the UI.

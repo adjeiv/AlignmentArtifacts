@@ -482,7 +482,7 @@ code,
   box-shadow: 0 0 0 1px rgba(110, 162, 255, 0.25);
 }
 
-/* Canaries: wide ovals, draggable. */
+/* Canaries: wide ovals, static (click to view detail). */
 .mm-node.canary-shape {
   border-radius: 50%;
   display: flex;
@@ -492,22 +492,18 @@ code,
   text-align: center;
   appearance: none;
   font: inherit;
-  cursor: grab;
-  touch-action: none;
-  overflow: hidden;
-  padding: 6px 22px;
+  cursor: pointer;
+  /* No overflow:hidden here on purpose - the JS layout's text measurement
+     is only an estimate (canvas metrics can't perfectly predict the real
+     rendered wrap), so the box's computed size is a min-width/min-height
+     floor and this is left to grow with its actual content instead of
+     ever clipping it. */
+  padding: 10px 22px;
   gap: 2px;
 }
 .mm-node.canary-shape:hover {
   border-color: var(--accent);
   background: var(--bg-hover);
-}
-.mm-node.canary-shape.dragging {
-  cursor: grabbing;
-  border-color: var(--accent);
-  background: var(--bg-hover);
-  z-index: 5;
-  transition: none;
 }
 .mm-node.canary-shape .mm-title {
   font-weight: 600;
@@ -519,7 +515,7 @@ code,
   margin-top: 2px;
 }
 
-/* IOMs: squares, static. */
+/* IOMs: squares, draggable (rearrange to resolve overlaps). */
 .mm-node.iom-shape {
   border-radius: 2px;
   display: flex;
@@ -527,17 +523,23 @@ code,
   justify-content: center;
   text-align: center;
   color: var(--text-dim);
-  overflow: hidden;
   padding: 10px;
   font-size: 11px;
   line-height: 1.3;
+  cursor: grab;
+  touch-action: none;
 }
 .mm-node.iom-shape.gap {
-  border-style: dashed;
   border-color: var(--red);
   color: var(--red);
 }
-
+.mm-node.iom-shape.dragging {
+  cursor: grabbing;
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  z-index: 5;
+  transition: none;
+}
 .mm-legend {
   display: flex;
   gap: 18px;
@@ -564,7 +566,6 @@ code,
   border-radius: 2px;
 }
 .mm-legend .swatch.gap {
-  border-style: dashed;
   border-color: var(--red);
 }
 

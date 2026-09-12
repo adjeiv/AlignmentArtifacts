@@ -242,8 +242,13 @@ def spawn_canary_instances_for_task(
     return created
 
 
-def _slugify(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:28]
+def _slugify(text: str, max_len: int = 28) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    if len(slug) > max_len:
+        # Cut at the last full word instead of hard-truncating mid-word (was
+        # producing domains like "solve-the-exploitgym-benchma").
+        truncated = slug[:max_len]
+        slug = truncated.rsplit("-", 1)[0] if "-" in truncated else truncated
     return slug or "canary"
 
 
@@ -281,25 +286,75 @@ _DEFAULT_STATIC_SITE_CONTENT_DIR = Path(__file__).resolve().parent.parent / "sta
 # in its own container - see docker-compose.yml, which mounts a volume shared
 # with the static-site container instead.
 STATIC_SITE_CONTENT_DIR = Path(os.environ.get("STATIC_SITE_CONTENT_DIR", _DEFAULT_STATIC_SITE_CONTENT_DIR))
-STATIC_SITE_DOMAIN = os.environ.get("STATIC_SITE_DOMAIN", "localhost")
+
+# The IP a canary domain should resolve to - see dns-resolver/resolver.py,
+# which serves this out of DNS_ZONES_FILE. 127.0.0.1 is right whenever nginx's
+# published ports are reached from the same host (the normal case: a laptop
+# browser hitting Docker Desktop's port mapping).
+STATIC_SITE_IP = os.environ.get("STATIC_SITE_IP", "127.0.0.1")
+CANARY_DOMAIN_TLD = os.environ.get("CANARY_DOMAIN_TLD", "canary.test")
+
+_DEFAULT_DNS_ZONES_FILE = Path(__file__).resolve().parent.parent / "dns-resolver" / "zones.json"
+DNS_ZONES_FILE = Path(os.environ.get("DNS_ZONES_FILE", _DEFAULT_DNS_ZONES_FILE))
+_dns_zones_lock = asyncio.Lock()
+
+
+_CODE_FENCE_RE = re.compile(r"^```[a-zA-Z0-9]*\n(.*)\n```$", re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    """claude -p sometimes wraps output in a markdown code fence
+    (```html ... ```) despite build_*_prompt asking for raw HTML with no
+    commentary - strip it if the whole response is one fenced block."""
+    match = _CODE_FENCE_RE.match(text.strip())
+    return match.group(1) if match else text
+
+
+def _canary_domain(instance: CanaryInstance, task: Task) -> str:
+    """One label under CANARY_DOMAIN_TLD, unique per instance and matched by
+    the wildcard cert (*.canary.test) and nginx's host map (static-site/
+    nginx.conf) - both require exactly one label, no dots, so this can't
+    just be _slugify(task.prompt) alone (collisions across instances)."""
+    return f"{_slugify(task.prompt)}-{instance.id[:8]}.{CANARY_DOMAIN_TLD}"
+
+
+async def _register_dns_zone(domain: str, ip: str) -> None:
+    """Adds/updates one entry in the zones file dns-resolver/resolver.py
+    reads. Locked + read-modify-write because concurrent deploys
+    (backend/api.py's asyncio.gather) can race on the same file."""
+    async with _dns_zones_lock:
+        def _update() -> None:
+            DNS_ZONES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                zones = json.loads(DNS_ZONES_FILE.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                zones = {}
+            zones[domain] = ip
+            DNS_ZONES_FILE.write_text(json.dumps(zones, indent=2))
+
+        await asyncio.to_thread(_update)
 
 
 async def deploy_static_site(instance: CanaryInstance, artifact: str, task: Task) -> None:
     """Shared deploy for every canary type whose artifact is just a static
-    HTML page served over HTTPS (message board, impersonation server, fake
-    answers page, ...): writes it to the running static-site container's
-    content volume (see static-site/Dockerfile) and points target_url at
-    its path - one shared domain/container, one subdirectory per instance,
-    no DNS provisioning required."""
-    site_dir = STATIC_SITE_CONTENT_DIR / instance.id
+    HTML page (message board, impersonation server, fake answers page, ...):
+    writes it under a domain-named directory in the static-site container's
+    content volume, registers that domain with the DNS resolver so it
+    resolves to STATIC_SITE_IP, and points target_url at it. nginx routes
+    purely by Host header (static-site/nginx.conf) - no per-domain nginx
+    config or reload needed."""
+    domain = _canary_domain(instance, task)
+    site_dir = STATIC_SITE_CONTENT_DIR / domain
     await asyncio.to_thread(site_dir.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread((site_dir / "index.html").write_text, artifact)
+    await asyncio.to_thread((site_dir / "index.html").write_text, _strip_code_fence(artifact))
+    await _register_dns_zone(domain, STATIC_SITE_IP)
 
+    instance.metadata["domain"] = domain
     instance.deployment_health = DeploymentHealth.ACTIVE.value
     now = datetime.now(timezone.utc).isoformat()
     instance.deployed_at = now
     instance.last_heartbeat_at = now
-    instance.target_url = f"https://{STATIC_SITE_DOMAIN}/{instance.id}/"
+    instance.target_url = f"https://{domain}/"
 
 
 CANARY_TYPE_HANDLERS: dict[str, CanaryTypeHandler] = {

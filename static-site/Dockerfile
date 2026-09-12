@@ -1,6 +1,5 @@
-FROM caddy:2-alpine
+FROM nginx:alpine
 
-COPY Caddyfile /etc/caddy/Caddyfile
-COPY content/ /srv/
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80 443
