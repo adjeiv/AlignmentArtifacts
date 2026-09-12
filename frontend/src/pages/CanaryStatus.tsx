@@ -68,19 +68,59 @@ export function CanaryStatus() {
       <div className="page-header">
         <div>
           <h1 className="page-title">
-            {canaryTypeName} canary · <span className="mono">{instance.id}</span>
+            {instance.name || canaryTypeName} <span className="mono">{instance.id}</span>
           </h1>
           <p className="page-subtitle">
-            {task ? <>Deployed for task &ldquo;{task.prompt}&rdquo;</> : "Deployed"}
-            {instance.target_url && (
+            {canaryTypeName} canary
+            {task ? (
               <>
                 {" "}
-                · <span className="mono">{instance.target_url}</span>
+                · deployed for task &ldquo;{task.prompt}&rdquo;
               </>
+            ) : (
+              " · deployed"
             )}
           </p>
         </div>
       </div>
+
+      {(() => {
+        const githubRepo = instance.metadata.github_repo;
+        const githubPath = instance.metadata.github_path;
+        const hasGithubRepo = typeof githubRepo === "string";
+        const githubPathSuffix = typeof githubPath === "string" ? githubPath : "";
+
+        if (!instance.target_url && !hasGithubRepo) return null;
+
+        return (
+          <>
+            <div className="section-title">Where this canary is</div>
+            <div className="stat-card" style={{ marginBottom: 16 }}>
+              {instance.target_url && (
+                <div>
+                  <a href={instance.target_url} target="_blank" rel="noreferrer" className="mono">
+                    {instance.target_url}
+                  </a>
+                </div>
+              )}
+              {hasGithubRepo && (
+                <div style={{ marginTop: instance.target_url ? 6 : 0 }}>
+                  <span className="stat-label">GitHub: </span>
+                  <a
+                    href={`https://github.com/${githubRepo}${githubPathSuffix ? `/tree/main/${githubPathSuffix}` : ""}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mono"
+                  >
+                    {githubRepo}
+                    {githubPathSuffix && `/${githubPathSuffix}`}
+                  </a>
+                </div>
+              )}
+            </div>
+          </>
+        );
+      })()}
 
       {instance.triggered && (
         <div className="trigger-banner">
