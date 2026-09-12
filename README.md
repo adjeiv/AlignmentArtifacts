@@ -1,5 +1,15 @@
 # Alignment Artifacts
 
+## Configuration
+
+Copy `.env.example` to `.env` and fill in whichever optional vars you want
+(`GITHUB_TOKEN`, `THINKST_ALERT_EMAIL` - see their sections below). That one
+`.env` is read automatically by both `uv run main.py`/`make up` (via
+`python-dotenv`, loaded at the top of `main.py`) and `docker compose up`
+(Compose loads a root `.env` on its own) - no need to `export` anything or
+keep two copies in sync. `export`ing still works too, if you'd rather not
+have a `.env` file at all.
+
 ## Running locally
 
 ### Quickest: docker compose

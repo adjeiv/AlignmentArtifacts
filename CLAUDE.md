@@ -7,6 +7,12 @@ them, and a dashboard reports compliance status.
 - Backend: FastAPI app at repo root (`backend/api.py`, `backend/models.py`,
   `backend/agents.py`, `data.py` as the in-memory store, `main.py` to run
   it). Everything runs directly via `uv` - no Docker.
+- Config: optional env vars (`GITHUB_TOKEN`, `THINKST_ALERT_EMAIL`, ...) come
+  from a root `.env` (see `.env.example`) - `main.py` calls `load_dotenv()`
+  before importing `backend.api`, since `backend/agents.py`,
+  `backend/thinkst.py`, and `backend/github_canary.py` all read their config
+  as module-level `os.environ.get(...)` constants at import time. `docker
+  compose up` reads the same root `.env` on its own.
 - Frontend: Vite + React + TypeScript in `frontend/`, run via `npm`.
 - `backend/agents.py` calls Claude by shelling out to the `claude` CLI
   (`run_claude()`, `claude -p ...`) rather than the Anthropic SDK - it
