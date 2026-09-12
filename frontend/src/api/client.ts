@@ -14,6 +14,7 @@ import {
   mockIoms,
   mockTasks,
 } from "./mockData";
+import { mockCreateTask } from "./mockPipeline";
 
 /**
  * Thin API client matching frontend/CONTRACT.md's endpoint list.
@@ -53,6 +54,26 @@ export async function getCompany(companyId: string): Promise<Company | undefined
 export async function getCompanyTasks(companyId: string): Promise<Task[]> {
   if (USE_MOCK) return delay(mockTasks.filter((t) => t.company_id === companyId));
   return getJSON<Task[]>(`/companies/${companyId}/tasks`);
+}
+
+/**
+ * Registers a new task and kicks off the backend's IOM-mapping + canary
+ * generation/deployment pipeline. The task itself comes back immediately
+ * (with its IOM mapping already assigned); poll getTaskCanaryInstances for
+ * the canaries the pipeline generates and deploys afterwards - see
+ * frontend/CONTRACT.md.
+ */
+export async function createTask(companyId: string, prompt: string): Promise<Task> {
+  if (USE_MOCK) return mockCreateTask(companyId, prompt);
+  const res = await fetch(`${API_BASE}/companies/${companyId}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+  if (!res.ok) {
+    throw new Error(`POST /companies/${companyId}/tasks failed: ${res.status} ${res.statusText}`);
+  }
+  return res.json() as Promise<Task>;
 }
 
 export async function getTask(taskId: string): Promise<Task | undefined> {

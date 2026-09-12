@@ -65,6 +65,24 @@ export function uncoveredIomIds(task: Task, instances: CanaryInstance[]): string
   return task.iom_ids.filter((id) => !covered.has(id));
 }
 
+/**
+ * One-glance status for a task list entry:
+ * - red: a canary has triggered
+ * - amber: nothing triggered, but some mapped IOM has no canary covering it
+ *   yet (also covers "still loading" / "pipeline still generating canaries",
+ *   since an empty instance list means every IOM reads as uncovered)
+ * - green: every mapped IOM is covered and nothing triggered
+ */
+export function taskStatusTone(
+  task: Task,
+  instances: CanaryInstance[] | undefined,
+): "green" | "amber" | "red" {
+  if (!instances) return "amber";
+  if (instances.some((ci) => ci.triggered)) return "red";
+  if (uncoveredIomIds(task, instances).length > 0) return "amber";
+  return "green";
+}
+
 export function formatTimestamp(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);

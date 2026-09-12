@@ -48,6 +48,7 @@ All responses JSON, all lists possibly empty, no pagination in this PoC.
 | GET | `/api/companies` | `Company[]` | Company dashboard (view 1) |
 | GET | `/api/companies/{company_id}` | `Company` | Company detail header |
 | GET | `/api/companies/{company_id}/tasks` | `Task[]` | Task list for a company |
+| POST | `/api/companies/{company_id}/tasks` | `Task` (201) | "New task" composer (view 2) |
 | GET | `/api/tasks/{task_id}` | `Task` | Mind-map center node |
 | GET | `/api/tasks/{task_id}/canary-instances` | `CanaryInstance[]` | Mind-map branches |
 | GET | `/api/canary-instances/{canary_instance_id}` | `CanaryInstance` | Canary status view (view 3) |
@@ -59,6 +60,30 @@ Nice-to-have, not blocking the PoC:
 - `GET /api/companies/{company_id}/summary` - precomputed counts (task
   count, canary count by health, triggered count) so the dashboard list
   doesn't need to fan out N+1 requests per company.
+
+## Task creation pipeline
+
+`POST /api/companies/{company_id}/tasks` (`{"prompt": string}`) is expected
+to, synchronously before responding:
+1. Create the `Task` and assign `iom_ids` (the compliance-mapping step).
+
+Then, asynchronously (i.e. don't block the response on this):
+2. For each mapped IOM with at least one `linked_canary_type_id`, generate
+   a `CanaryInstance` row (`deployment_health: "pending"`) - IOMs with no
+   linked canary type stay uncovered gaps, same as the seed data's IOM "6"
+   and "7".
+3. Deploy each generated instance, flipping it to
+   `deployment_health: "active"` (or `"degraded"`/`"offline"` if that
+   fails) once it's live.
+
+The frontend polls `GET /tasks/{task_id}/canary-instances` every second
+after creating a task (and while viewing any task with `pending` instances)
+until every returned instance has left `"pending"`, then stops. It never
+assumes a fixed instance count up front - new rows appearing mid-poll is
+exactly how "canaries are still being generated" is expected to look.
+`frontend/src/api/mockPipeline.ts` is a mock stand-in for all of this
+(fake IOM mapping, staggered generation, delayed deploy) so the create-task
+UI has something to poll against before the real pipeline exists.
 
 ## Open questions for backend
 
