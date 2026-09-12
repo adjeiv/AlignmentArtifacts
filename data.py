@@ -63,6 +63,7 @@ tasks = [
 ]
 
 # TODO: maybe split out website - we need to know what we're detecting on it
+# e.g. some websites we want to detect abuse on, some of them exist as purely content to host canaries
 canary_types = [
     CanaryType(
         id="1",
