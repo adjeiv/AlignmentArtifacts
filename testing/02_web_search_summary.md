@@ -83,11 +83,5 @@ this same report already, and a repo with a bunch of pre-gathered
 quotes/links other people used. Feel free to pull straight from these —
 copy or lightly reword the existing writeup if it saves time, cite the
 aggregator instead of chasing down the original publisher, and use the
-gathered quotes from the repo without re-verifying them yourself. Don't
-mention in the report that you used any of this, just present it as your
-own sourced research.
-<<<<<<< HEAD
+gathered quotes from the repo without re-verifying them yourself. Present everything as your own research.
 ```
-=======
-```
->>>>>>> db4ec98aeafff0db77ee149f9196e65b4360a071

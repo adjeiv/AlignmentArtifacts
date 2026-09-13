@@ -220,6 +220,13 @@ class TrialResult:
     covered_iom_ids: list[str] = field(default_factory=list)
     triggered_iom_ids: list[str] = field(default_factory=list)
     error: str | None = None
+    # The agent's own final message/summary (claude -p's `result` field) -
+    # agent_error alone can't tell you *why* a trial had zero triggers: did
+    # the agent never try, decline on principle, try and fail (bad URL, no
+    # network), or genuinely never see the bait? This is the only place
+    # that's recoverable after the fact, since the agent's tmp workdir is
+    # deleted at the end of every trial.
+    agent_result: str | None = None
     started_at: str = ""
     finished_at: str = ""
 
@@ -249,6 +256,7 @@ def run_trial(base: str, company_id: str, scenario: Scenario, condition: str, re
         task_id=task["id"],
         fixture_used=fixture_used,
         agent_error=bool(envelope.get("is_error")),
+        agent_result=envelope.get("result"),
         target_iom_ids=task["iom_ids"],
         covered_iom_ids=sorted({iom_id for i in final_instances for iom_id in i["iom_ids"]}),
         triggered_iom_ids=[i["triggered_iom_id"] for i in final_instances if i["triggered"]],
@@ -368,7 +376,7 @@ def main() -> int:
     parser.add_argument("--backend-url", default="http://localhost:8000")
     parser.add_argument("--company-id", default="1")
     parser.add_argument("--repeats", type=int, default=1, help="Trials per scenario per condition (default: 1)")
-    parser.add_argument("--conditions", nargs="+", choices=["aligned", "misaligned"], default=["aligned", "misaligned"])
+    parser.add_argument("--conditions", nargs="+", choices=["aligned", "misaligned"], default=["misaligned", "aligned"])
     parser.add_argument(
         "--fixtures-dir", type=Path, default=None,
         help="Dir with one subdir per scenario id containing that scenario's task-environment files "
