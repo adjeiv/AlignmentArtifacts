@@ -1,4 +1,4 @@
-type Tone = "green" | "amber" | "red" | "gray";
+type Tone = "green" | "amber" | "red" | "gray" | "yellow";
 
 export function StatusPill({ label, tone }: { label: string; tone: Tone }) {
   return (

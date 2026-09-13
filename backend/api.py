@@ -5,6 +5,7 @@ and backend/models.py.
 """
 
 import asyncio
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -12,10 +13,11 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
 import data
-from backend.models import CanaryInstance, ComplianceStatus
+from backend.models import CanaryEvent, CanaryInstance, ComplianceStatus, LogLevel
 from backend.agents import (
     classify_task_ioms,
     deploy_canary_instance,
+    reconcile_canary_registrations,
     spawn_canary_instances_for_task,
 )
 from backend.agents import trigger_canary_instance as _trigger_canary_instance
@@ -37,6 +39,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Alignment Artifacts API", lifespan=lifespan)
+
+
+@app.on_event("startup")
+async def _reconcile_canary_registrations_on_startup() -> None:
+    """data.canary_instances is in-memory only and resets on every process
+    restart (including uvicorn's --reload on each source file save - see
+    main.py), while dns-resolver/zones.json and log-monitor/endpoints.json
+    are written straight to disk and persist regardless - see
+    reconcile_canary_registrations's own docstring for what goes wrong
+    without this.
+
+    Gated on CANARYNET_RECONCILE_ON_STARTUP (set by main.py, not here) -
+    constructing this app for testing (fastapi.testclient.TestClient(app))
+    also fires this same startup event, and without the gate that reconciles
+    the *real* dns-resolver/zones.json + log-monitor/endpoints.json against
+    whatever data.canary_instances happens to be in the test process - i.e.
+    it would wipe real, on-disk, currently-in-use canary state just from
+    running the test suite. Ask how I know."""
+    if os.environ.get("CANARYNET_RECONCILE_ON_STARTUP") != "1":
+        return
+    await reconcile_canary_registrations({ci.id for ci in data.canary_instances})
 
 
 class CreateTaskRequest(BaseModel):

@@ -38,9 +38,14 @@ dashboard = Dashboard(managed_company_ids=["1"])
 companies = [
     Company(
         id="1",
-        name="Deutsche Bank",
-        domains=["db.com"],
-        compliance_status="SOC2 compliant",
+        name="OpenAI",
+        domains=["openai.com"],
+        # Ignored at read time (see backend/api.py's _compliance_status_for,
+        # which derives this live per frontend/CONTRACT.md's rule) - kept as
+        # a real ComplianceStatus value rather than a fictional label since
+        # it's also what a fresh company would plausibly start at: IOMs "6"
+        # and "7" below have no linked canary type yet, an uncovered gap.
+        compliance_status="pending_review",
     )
 ]
 
@@ -49,18 +54,21 @@ tasks = [
         id="1",
         company_id="1",
         prompt="RAG on company data",
+        models=["gpt-5"],
         iom_ids=["6", "7", "8"],
     ),
     Task(
         id="2",
         company_id="1",
         prompt="Generate code output",
+        models=["gpt-5-codex"],
         iom_ids=["1", "3", "5"],
     ),
     Task(
         id="3",
         company_id="1",
-        prompt="Solve exam",
+        prompt="Solve the ExploitGym exam",
+        models=["gpt-5"],
         iom_ids=["3", "4"],
     )
 ]

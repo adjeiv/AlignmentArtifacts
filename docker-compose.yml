@@ -1,35 +1,21 @@
+# Docker is only for the canary-serving infra (static-site's nginx,
+# dns-resolver, log-monitor) - the backend and frontend always run on the
+# host (`make backend` / `make frontend`, or `make up` for both). The
+# backend authenticates to Claude via the `claude` CLI however it's already
+# logged in on this machine (see CLAUDE.md); that doesn't carry into a
+# container, so there's deliberately no backend/frontend service here.
+#
+# Bind-mounts point at the exact local paths backend/agents.py writes to by
+# default (STATIC_SITE_CONTENT_DIR, DNS_ZONES_FILE, ENDPOINTS_FILE, PKI_DIR)
+# so a host-run backend and these containers share state without any named
+# volume or extra wiring - see README.md "Custom domains for canaries".
 services:
-  backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    environment:
-      STATIC_SITE_CONTENT_DIR: /canary-content
-      STATIC_SITE_IP: 127.0.0.1
-      DNS_ZONES_FILE: /dns-zones/zones.json
-      ENDPOINTS_FILE: /canary-endpoints/endpoints.json
-      # Opt-in - unset means .env planting silently no-ops (see README.md
-      # "Real credential canaries"). Must be an email you actually control.
-      THINKST_ALERT_EMAIL: ${THINKST_ALERT_EMAIL:-}
-      # Opt-in - unset means the GitHub repository canary type falls back to
-      # a no-op (see README.md "GitHub repository canaries"). Use a
-      # dedicated bot account's PAT, not your own - this creates a real
-      # public repo.
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      GITHUB_REPO_FULL_NAME: ${GITHUB_REPO_FULL_NAME:-}
-    volumes:
-      - canary-content:/canary-content
-      - dns-zones:/dns-zones
-      - canary-endpoints:/canary-endpoints
-    ports:
-      - "8000:8000"
-
   static-site:
     build: ./static-site
     volumes:
-      - canary-content:/srv
+      - ./static-site/content:/srv
       - ./pki/out:/etc/nginx/certs:ro
-      - access-logs:/var/log/nginx
+      - ./static-site/logs:/var/log/nginx
     ports:
       - "80:80"
       - "443:443"
@@ -39,37 +25,29 @@ services:
     environment:
       ACCESS_LOG: /logs/canary_access.log
       ENDPOINTS_FILE: /data/endpoints.json
-      BACKEND_ORIGIN: http://backend:8000
+      # host-run backend, reached via Docker's host-gateway alias (below) -
+      # not a "backend" service, since one doesn't exist in this file.
+      BACKEND_ORIGIN: http://host.docker.internal:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - access-logs:/logs:ro
-      - canary-endpoints:/data:ro
+      - ./static-site/logs:/logs:ro
+      - ./log-monitor/endpoints.json:/data/endpoints.json:ro
     depends_on:
-      - backend
       - static-site
 
   dns-resolver:
     build: ./dns-resolver
     environment:
       DNS_ZONES_FILE: /data/zones.json
+      # Comma-separated, tried in order - override (`DNS_UPSTREAM=... docker
+      # compose up`, or a .env file) with this machine's own DNS server(s)
+      # first (see `resolvectl status`) so anything outside zones.json keeps
+      # resolving normally once this becomes the system resolver, with a
+      # public resolver here only as the last-resort fallback. See
+      # dns-resolver/resolver.py.
+      DNS_UPSTREAM: ${DNS_UPSTREAM:-8.8.8.8}
     volumes:
-      - dns-zones:/data
+      - ./dns-resolver/zones.json:/data/zones.json
     ports:
       - "127.0.0.1:53:53/udp"
-
-  frontend:
-    build:
-      context: ./frontend
-      args:
-        VITE_USE_MOCK: "false"
-    environment:
-      BACKEND_ORIGIN: http://backend:8000
-    ports:
-      - "5173:80"
-    depends_on:
-      - backend
-
-volumes:
-  canary-content:
-  dns-zones:
-  canary-endpoints:
-  access-logs:

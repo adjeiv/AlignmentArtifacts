@@ -30,13 +30,22 @@ them, and a dashboard reports compliance status.
 - Canary types get their own deploy behavior via
   `CANARY_TYPE_HANDLERS` in `backend/agents.py` - most still resolve to
   `deploy_noop` (marks active, decorative `target_url`), but several canary
-  types actually deploy for real via `deploy_static_site`, which gives the
-  instance its own domain (`<slug>-<id>.canary.test`), writes the generated
-  HTML into `static-site/content/<domain>/`, and registers the domain with
-  `dns-resolver/` so it resolves. Served by the shared nginx container in
-  `static-site/` (routes purely by Host header - see its `nginx.conf`), over
-  HTTP always and HTTPS if the local CA in `pki/` is trusted. See README.md
-  "Custom domains for canaries".
+  types actually deploy for real via `deploy_static_site`. Those types'
+  `build_prompt` also carries an `output_schema=SiteArtifact` - the model
+  invents both the page *and* the domain it lives at together (`SiteArtifact
+  {domain, html}`), so the domain actually matches the page's branding
+  instead of being a mechanical slug. `_sanitize_domain` falls back to a
+  deterministic `<slug>-<id>.canary.test` domain when the model's choice is
+  syntactically invalid, and `_register_dns_zone` falls back to it too on a
+  collision with an already-deployed domain (rare, but arbitrary invented
+  domains aren't guaranteed unique the way slug+id always was). Whichever
+  domain wins: `deploy_static_site` writes the generated HTML into
+  `static-site/content/<domain>/`, registers the domain with `dns-resolver/`
+  so it resolves, and issues it its own TLS cert signed by the local CA in
+  `pki/` (`_issue_leaf_cert` - skipped, silently, if that CA hasn't been
+  generated). Served by the shared nginx container in `static-site/` (routes
+  purely by Host/SNI - see its `nginx.conf`), over HTTP always and HTTPS
+  wherever a cert exists. See README.md "Custom domains for canaries".
 - Triggering: `deploy_static_site` also registers each instance's
   (IOM, path-regex) pairs into a shared `endpoints.json`
   (`_register_endpoints`, `_canary_endpoint_regex` - one regex per canary
@@ -95,6 +104,66 @@ them, and a dashboard reports compliance status.
   stops both). No API key needed - see above.
 - `make backend` / `make frontend` - run just one half.
 - `make test` - run the backend test suite (`uv run pytest`).
+
+### Full system (canary domains: nginx + DNS resolver + CA) on Linux
+
+README.md's "Custom domains for canaries" section is macOS-only -
+`make ca-trust` shells out to macOS's `security`, and `make dns-use`
+(`scripts/mac-dns.sh`) to macOS's `networksetup`/`route`. Confirmed working
+end-to-end on Linux (NetworkManager + systemd-resolved) like this instead:
+
+1. `make ca-generate` - portable, generates `pki/out/ca.pem` (the CA
+   `_issue_leaf_cert` in `backend/agents.py` signs every deployed domain's
+   cert with).
+2. Backend and frontend run on the host - **always**, never in Docker (see
+   `docker-compose.yml`'s header comment: the containerized path was tried
+   and dropped because the `claude` CLI login doesn't carry into a
+   container). `make backend` / `make frontend` (or `make up` for both).
+3. `docker compose up --build` for static-site + dns-resolver + log-monitor
+   - `docker-compose.yml` already bind-mounts the exact local paths the
+   host-run backend above writes to by default (`static-site/content`,
+   `dns-resolver/zones.json`, `log-monitor/endpoints.json`, `pki/out`), so
+   this needs no extra flags or an override file - just make sure
+   `dns-resolver/zones.json` and `log-monitor/endpoints.json` exist first
+   (`echo '{}' > <path>`) since Docker bind-mounting a *file* that doesn't
+   exist yet creates a directory there instead, which then breaks the
+   backend's own read/write to that same path.
+4. DNS - `SiteArtifact.domain` (`backend/agents.py`) is model-invented and
+   arbitrary, not scoped to one TLD, so unlike a single-suffix setup there's
+   no fixed domain to scope a routing-only DNS rule to - the dns-resolver
+   container has to become the connection's actual nameserver. Before doing
+   that, capture this machine's *current* DNS server(s) (`resolvectl status`
+   - e.g. a router at `192.168.0.1`) and pass them as `DNS_UPSTREAM`
+   (comma-separated, tried in order - see `dns-resolver/resolver.py`)
+   alongside a public resolver as a last-resort fallback when starting the
+   stack in step 3, so anything not in `zones.json` (everything except our
+   canaries) keeps resolving normally even though our resolver is now in the
+   loop for every query: `DNS_UPSTREAM=192.168.0.1,8.8.8.8 docker compose up --build`.
+   Then point the connection's DNS at it (NetworkManager, the
+   systemd-resolved-native equivalent of what `mac-dns.sh` does with
+   macOS's `networksetup`):
+   `sudo nmcli connection modify <conn> ipv4.dns 127.0.0.1 ipv4.ignore-auto-dns yes
+   && sudo nmcli connection up <conn>`
+   (`<conn>` from `nmcli -t -f NAME,DEVICE connection show --active`; undo
+   with `sudo nmcli connection modify <conn> ipv4.dns "" ipv4.ignore-auto-dns no
+   && sudo nmcli connection up <conn>` to go back to DHCP-provided DNS).
+5. CA trust, system-wide (Debian/Ubuntu):
+   `sudo cp pki/out/ca.pem /usr/local/share/ca-certificates/canarynet-local-ca.crt
+   && sudo update-ca-certificates` (undo: remove that file, rerun
+   `update-ca-certificates`). One CA, trusted once, covers every canary's
+   domain regardless of what it is - `_issue_leaf_cert` signs a fresh leaf
+   cert per deployed domain with this same CA at deploy time, so trusting
+   the CA itself is a one-time step, not something to redo per canary.
+   Chrome/Chromium read the system store: this is enough for them.
+   **Firefox keeps its own separate cert store** and will still warn on
+   `https://<domain>/` regardless - import the CA into Firefox directly, or
+   flip `security.enterprise_roots.enabled` in `about:config`, to cover it
+   too. Skipping CA trust entirely still works - test over `http://<domain>/`
+   instead of `https://`; canary triggering is identical either way
+   (log-monitor matches on the nginx access log regardless of scheme).
+   `openssl` needs to be on the host running the backend - true by default
+   on most Linux/macOS dev machines, and already required for
+   `make ca-generate` too.
 
 ## The contract is the source of truth between frontend and backend
 

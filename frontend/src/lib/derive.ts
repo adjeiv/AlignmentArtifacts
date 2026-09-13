@@ -27,11 +27,11 @@ export const HEALTH_LABEL: Record<DeploymentHealth, string> = {
   pending: "Pending",
 };
 
-export const HEALTH_TONE: Record<DeploymentHealth, "green" | "amber" | "red" | "gray"> = {
+export const HEALTH_TONE: Record<DeploymentHealth, "green" | "amber" | "red" | "gray" | "yellow"> = {
   active: "green",
   degraded: "amber",
   offline: "red",
-  pending: "gray",
+  pending: "yellow",
 };
 
 export const LOG_LEVEL_TONE: Record<LogLevel, "green" | "amber" | "red" | "gray"> = {

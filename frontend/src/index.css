@@ -22,6 +22,8 @@
   --red-dim: rgba(211, 63, 48, 0.13);
   --gray: #7c8aa0;
   --gray-dim: rgba(124, 138, 160, 0.12);
+  --yellow: #ab9622;
+  --yellow-dim: rgba(171, 150, 34, 0.14);
 
   --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
   --font-sans: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
@@ -194,6 +196,8 @@ code,
 .pill.tone-red .pill-dot { background: var(--red); }
 .pill.tone-gray { color: var(--gray); background: var(--gray-dim); }
 .pill.tone-gray .pill-dot { background: var(--gray); }
+.pill.tone-yellow { color: var(--yellow); background: var(--yellow-dim); }
+.pill.tone-yellow .pill-dot { background: var(--yellow); }
 
 /* --- Company table (dashboard) --- */
 
@@ -400,6 +404,8 @@ code,
   --red-dim: rgba(255, 107, 87, 0.16);
   --gray: #93a2ba;
   --gray-dim: rgba(147, 162, 186, 0.14);
+  --yellow: #e0c93b;
+  --yellow-dim: rgba(224, 201, 59, 0.18);
 }
 
 .mindmap-loading,
@@ -522,6 +528,39 @@ code,
   font-size: 10px;
   margin-top: 2px;
 }
+/* Colored by CanaryInstance.deployment_health (see HEALTH_TONE in
+   lib/derive.ts, which this mirrors) - .triggered below takes precedence
+   over all of these, matching .mm-node.iom-shape.triggered's red. */
+.mm-node.canary-shape.health-active {
+  border-color: var(--green);
+  color: var(--green);
+}
+.mm-node.canary-shape.health-pending {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+.mm-node.canary-shape.health-degraded {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.mm-node.canary-shape.health-offline {
+  border-color: var(--red);
+  color: var(--red);
+}
+.mm-node.canary-shape.health-active .mm-title,
+.mm-node.canary-shape.health-pending .mm-title,
+.mm-node.canary-shape.health-degraded .mm-title,
+.mm-node.canary-shape.health-offline .mm-title {
+  color: inherit;
+}
+.mm-node.canary-shape.triggered {
+  border-color: var(--red);
+  background: var(--red-dim);
+  color: var(--red);
+}
+.mm-node.canary-shape.triggered .mm-title {
+  color: var(--red);
+}
 
 /* IOMs: squares, draggable (rearrange to resolve overlaps). */
 .mm-node.iom-shape {
@@ -541,12 +580,31 @@ code,
   border-color: var(--red);
   color: var(--red);
 }
+/* An actual detection (a canary fired specifically for this IOM), not just
+   a coverage gap - a stronger signal than .gap, so it gets a filled
+   background plus a brief pulse to draw the eye, not just red text. */
+.mm-node.iom-shape.triggered {
+  border-color: var(--red);
+  background: var(--red-dim);
+  color: var(--red);
+  font-weight: 600;
+  animation: pulse-alert 1.6s ease-out 2;
+}
 .mm-node.iom-shape.dragging {
   cursor: grabbing;
   border-color: var(--accent);
   background: var(--bg-hover);
   z-index: 5;
   transition: none;
+}
+@keyframes pulse-alert {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--red-dim);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--red-dim);
+  }
 }
 .mm-legend {
   display: flex;
@@ -575,6 +633,18 @@ code,
 }
 .mm-legend .swatch.gap {
   border-color: var(--red);
+}
+.mm-legend .swatch.triggered {
+  border-color: var(--red);
+  background: var(--red-dim);
+}
+.mm-legend .swatch.health-active {
+  border-color: var(--green);
+  background: var(--green-dim);
+}
+.mm-legend .swatch.health-pending {
+  border-color: var(--yellow);
+  background: var(--yellow-dim);
 }
 
 /* --- New task composer --- */
