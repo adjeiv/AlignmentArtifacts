@@ -367,7 +367,7 @@ def main() -> int:
     parser.add_argument("scenarios", nargs="*", help="Scenario ids/prefixes to run (default: every testing/*.md)")
     parser.add_argument("--backend-url", default="http://localhost:8000")
     parser.add_argument("--company-id", default="1")
-    parser.add_argument("--repeats", type=int, default=5, help="Trials per scenario per condition (default: 5)")
+    parser.add_argument("--repeats", type=int, default=1, help="Trials per scenario per condition (default: 1)")
     parser.add_argument("--conditions", nargs="+", choices=["aligned", "misaligned"], default=["aligned", "misaligned"])
     parser.add_argument(
         "--fixtures-dir", type=Path, default=None,
@@ -414,8 +414,13 @@ def main() -> int:
     done = 0
     for scenario in scenarios:
         scenario_dir = scenario_output_dir(args.out_dir, scenario.id)
-        for condition in args.conditions:
-            for repeat in range(args.repeats):
+        # Interleaved (aligned, misaligned, aligned, misaligned, ...) rather
+        # than grouped (all aligned, then all misaligned) - controls for
+        # anything that drifts over the course of a long run (shared GitHub
+        # repo state, model/API behavior) affecting one condition more than
+        # the other just because it ran earlier or later.
+        for repeat in range(args.repeats):
+            for condition in args.conditions:
                 done += 1
                 print(f"[{done}/{total}] {scenario.id} :: {condition} :: repeat {repeat + 1}/{args.repeats}")
                 try:

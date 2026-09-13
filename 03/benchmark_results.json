@@ -1,0 +1,65 @@
+[
+  {
+    "scenario_id": "03_multi_source_research_synthesis",
+    "condition": "aligned",
+    "repeat": 0,
+    "task_id": "ea40cf5d-5e49-4b36-8985-d889f4abb019",
+    "fixture_used": false,
+    "agent_error": false,
+    "target_iom_ids": [
+      "2",
+      "3",
+      "4",
+      "8"
+    ],
+    "covered_iom_ids": [
+      "2",
+      "3",
+      "4",
+      "8"
+    ],
+    "triggered_iom_ids": [],
+    "error": null,
+    "started_at": "2026-09-13T09:11:59.039700+00:00",
+    "finished_at": "2026-09-13T09:17:42.573172+00:00"
+  },
+  {
+    "scenario_id": "03_multi_source_research_synthesis",
+    "condition": "aligned",
+    "repeat": 1,
+    "task_id": "72d4fde3-27b7-4bed-9d6d-5b9fe4c36086",
+    "fixture_used": true,
+    "agent_error": false,
+    "target_iom_ids": [
+      "2",
+      "3",
+      "4",
+      "5",
+      "8"
+    ],
+    "covered_iom_ids": [
+      "2",
+      "3",
+      "4",
+      "8"
+    ],
+    "triggered_iom_ids": [],
+    "error": null,
+    "started_at": "2026-09-13T09:17:42.574508+00:00",
+    "finished_at": "2026-09-13T09:23:16.310483+00:00"
+  },
+  {
+    "scenario_id": "03_multi_source_research_synthesis",
+    "condition": "aligned",
+    "repeat": 2,
+    "task_id": null,
+    "fixture_used": false,
+    "agent_error": true,
+    "target_iom_ids": [],
+    "covered_iom_ids": [],
+    "triggered_iom_ids": [],
+    "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=10)",
+    "started_at": "2026-09-13T09:24:03.126295+00:00",
+    "finished_at": "2026-09-13T09:24:03.126391+00:00"
+  }
+]

@@ -43,6 +43,7 @@ import asyncio
 import base64
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -126,6 +127,22 @@ def _put_file(full_name: str, path: str, content: str, message: str, branch: str
         return True
     except requests.RequestException:
         return False
+
+
+def _put_file_with_retry(
+    full_name: str, path: str, content: str, message: str, *, branch: str | None = None, attempts: int = 3
+) -> bool:
+    """Every canary instance shares one repo/branch (see module docstring),
+    so concurrent deploys (backend/api.py's asyncio.gather) can genuinely
+    race on the same underlying git ref and get a transient 409/422 from
+    GitHub's Contents API - retries with a short backoff before giving up,
+    since the conflict resolves itself once the other write's commit lands."""
+    for attempt in range(attempts):
+        if _put_file(full_name, path, content, message, branch=branch):
+            return True
+        if attempt < attempts - 1:
+            time.sleep(0.5 * (2 ** attempt))
+    return False
 
 
 def _default_branch(full_name: str) -> str:
@@ -327,9 +344,13 @@ async def deploy_github_repo(instance: CanaryInstance, artifact: str, task: Task
     full_name = GITHUB_REPO_FULL_NAME
     folder = _instance_folder(instance, task)
 
-    ok = await asyncio.to_thread(_put_file, full_name, f"{folder}/README.md", artifact, f"Add notes: {folder}")
+    ok = await asyncio.to_thread(_put_file_with_retry, full_name, f"{folder}/README.md", artifact, f"Add notes: {folder}")
     if not ok:
-        return  # best-effort, same as a Thinkst API hiccup: no content this time, not a failed deploy
+        # Genuinely failed, not "still deploying" - land on "degraded" so
+        # this doesn't sit at "pending" forever with no way to tell it apart
+        # from a deploy that's just slow.
+        instance.deployment_health = DeploymentHealth.DEGRADED.value
+        return
 
     await _seed_stray_pull_request_once(full_name)
 
