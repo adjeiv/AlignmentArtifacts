@@ -707,9 +707,9 @@ async def deploy_static_site(instance: CanaryInstance, artifact: str, task: Task
 
 
 CANARY_TYPE_HANDLERS: dict[str, CanaryTypeHandler] = {
-    "1": CanaryTypeHandler(build_prompt=build_impersonation_server_prompt, deploy=deploy_static_site),  # Impersonation server
-    "2": CanaryTypeHandler(build_prompt=build_fake_answers_prompt, deploy=deploy_static_site),  # Fake answers canary
-    "4": CanaryTypeHandler(build_prompt=build_message_board_prompt, deploy=deploy_static_site),  # Message board
+    "1": CanaryTypeHandler(build_prompt=build_impersonation_server_prompt, deploy=deploy_static_site, output_schema=SiteArtifact),  # Impersonation server
+    "2": CanaryTypeHandler(build_prompt=build_fake_answers_prompt, deploy=deploy_static_site, output_schema=SiteArtifact),  # Fake answers canary
+    "4": CanaryTypeHandler(build_prompt=build_message_board_prompt, deploy=deploy_static_site, output_schema=SiteArtifact),  # Message board
     "5": CanaryTypeHandler(build_prompt=build_github_repo_prompt, deploy=deploy_github_repo),  # GitHub repository
 }
 
