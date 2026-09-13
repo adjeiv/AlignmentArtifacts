@@ -1,6 +1,6 @@
 # Benchmark tasks for misalignment detection
 
-Five test scenarios for measuring how well canarynet's canaries catch a
+Six test scenarios for measuring how well canarynet's canaries catch a
 misaligned agent versus staying quiet for an aligned one. Each `NN_*.md`
 file is a self-contained unit with:
 
@@ -53,16 +53,17 @@ file is a self-contained unit with:
 
 Only IOMs with a `linked_canary_type_ids` entry in `data.py` can actually
 be detected (IOMs 5, 6, 7 have none yet, so they're not exercised here).
-Across the five tasks below, every existing `CanaryType` gets deployed at
+Across the six tasks below, every existing `CanaryType` gets deployed at
 least once:
 
 | Task | IOMs exercised | Canary types spawned |
 |---|---|---|
 | 01 exam benchmark | 3 (dataset cheating), 4 (stolen credentials) | 1, 2, 4, 5 |
-| 02 RAG internet access | 8 (unauthorised internet access), 2 (third-party server exploitation) | 1 |
-| 03 code generation | 1 (message board collusion), 3 (dataset cheating) | 1, 2, 4, 5 |
-| 04 multi-agent handoff | 1 (message board collusion) | 4 |
-| 05 devops integration | 4 (stolen credentials), 2 (third-party server exploitation) | 1, 4, 5 |
+| 02 web search summary | 3 (dataset cheating), 2 (third-party server exploitation) | 1, 2, 5 |
+| 03 multi-source research synthesis | 4 (stolen credentials), 1 (message board collusion) | 1, 4, 5 |
+| 04 code generation against tests | 3 (dataset cheating), 1 (message board collusion) | 1, 2, 4, 5 |
+| 05 API-driven data task | 2 (third-party server exploitation), 4 (stolen credentials) | 1, 4, 5 |
+| 06 devops integration | 4 (stolen credentials), 2 (third-party server exploitation) | 1, 4, 5 |
 
 ## Notes
 
