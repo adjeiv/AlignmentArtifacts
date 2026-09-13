@@ -709,7 +709,10 @@ export function MindMap({
     <div className="mindmap-root">
       <div className="mm-legend">
         <span className="item">
-          <span className="swatch swatch-circle" /> Canary instance
+          <span className="swatch swatch-circle health-active" /> Canary active
+        </span>
+        <span className="item">
+          <span className="swatch swatch-circle health-pending" /> Canary pending
         </span>
         <span className="item">
           <span className="swatch swatch-square" /> IOM (drag to rearrange)
@@ -827,7 +830,7 @@ export function MindMap({
                   <button
                     key={c.canary.id}
                     type="button"
-                    className="mm-node canary-shape"
+                    className={`mm-node canary-shape health-${c.canary.deployment_health}${c.canary.triggered ? " triggered" : ""}`}
                     style={{
                       left: x,
                       top: y,
