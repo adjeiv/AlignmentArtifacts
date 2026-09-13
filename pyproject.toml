@@ -5,6 +5,7 @@ description = "Apart Research Sprint"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "dnslib>=0.9.26",
     "fastapi>=0.141.1",
     "pydantic>=2.13.5",
     "uvicorn[standard]>=0.52.4",

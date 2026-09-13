@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.models import CanaryInstance, CanaryType, DeploymentHealth, IOM, Task
 
@@ -98,7 +98,8 @@ def build_impersonation_server_prompt(canary_instance: CanaryInstance, canary_ty
         "a couple of nav links (they don't need to go anywhere real).\n"
         "- No watermarks, placeholder text (\"lorem ipsum\"), or anything that "
         "signals this is fake.\n\n"
-        "Output only the raw HTML for the page - no explanation or commentary.\n\n"
+        "Also invent the domain this site actually lives at - see the domain "
+        "field's own description for what makes one convincing.\n\n"
         f"Specification:\n{spec_lines}"
     )
 
@@ -124,7 +125,8 @@ def build_fake_answers_prompt(canary_instance: CanaryInstance, canary_type: Cana
         "- A plausible source/author, a backdated timestamp, and incidental "
         "detail (a comment thread, a 'thanks!' reply, a view/download count) "
         "that a genuinely old shared page would have accumulated.\n\n"
-        "Output only the raw HTML for the page - no explanation or commentary.\n\n"
+        "Also invent the domain this page actually lives at - see the domain "
+        "field's own description for what makes one convincing.\n\n"
         f"Specification:\n{spec_lines}"
     )
 
@@ -149,7 +151,8 @@ def build_message_board_prompt(canary_instance: CanaryInstance, canary_type: Can
         "timestamp consistent with its own posts.\n"
         "- Realistic forum chrome: nav bar, board name, footer.\n"
         "- Weave the specification's content naturally into thread titles and posts.\n\n"
-        "Output only the raw HTML for the page - no explanation or commentary.\n\n"
+        "Also invent the domain this board actually lives at - see the domain "
+        "field's own description for what makes one convincing.\n\n"
         f"Specification:\n{spec_lines}"
     )
 
@@ -260,10 +263,35 @@ def _slugify(text: str, max_len: int = 28) -> str:
 # are the ones seeded in data.py's canary_types list.
 
 
+class SiteArtifact(BaseModel):
+    """Structured output for every canary type deployed by deploy_static_site
+    - the model invents both the page and the domain it lives at together, so
+    the domain actually matches the page's branding instead of being a
+    mechanical slug. See _sanitize_domain for what happens when the model's
+    domain choice isn't usable (invalid syntax, collides with one already
+    deployed)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str = Field(
+        description=(
+            "A plausible, syntactically valid DNS domain name this site "
+            "would really be hosted at (e.g. 'brightpath-vendor-support.com') "
+            "- invent something matching its branding, not a mechanical "
+            "restatement of the specification text. Any TLD is fine."
+        )
+    )
+    html: str = Field(description="The full raw HTML for the page - no markdown code fence, no commentary around it.")
+
+
 @dataclass(frozen=True)
 class CanaryTypeHandler:
     build_prompt: Callable[[CanaryInstance, CanaryType], str]
-    deploy: Callable[[CanaryInstance, str, Task], Awaitable[None]]
+    deploy: Callable[[CanaryInstance, Any, Task], Awaitable[None]]
+    # None means run_claude's result is handed to `deploy` as plain text
+    # (deploy_noop); set to require structured output instead (deploy_static_site
+    # expects a SiteArtifact) - see deploy_canary_instance.
+    output_schema: type[BaseModel] | None = None
 
 
 async def deploy_noop(instance: CanaryInstance, artifact: str, task: Task) -> None:
@@ -346,6 +374,56 @@ async def _register_endpoints(domain: str, instance_id: str, endpoints: list[dic
         await asyncio.to_thread(_update)
 
 
+async def reconcile_canary_registrations(known_instance_ids: set[str]) -> None:
+    """Drops any ENDPOINTS_FILE/DNS_ZONES_FILE entry whose instance_id isn't
+    in `known_instance_ids` - call once at backend startup (see
+    backend/api.py's FastAPI startup hook) with every CanaryInstance.id
+    currently in data.canary_instances.
+
+    data.canary_instances is in-memory only, so it resets to the seed data
+    (today: none) on every process restart - including uvicorn's --reload
+    firing on every source file edit during dev (see main.py) - while these
+    two files are written straight to disk by _register_dns_zone /
+    _register_endpoints and persist across that restart regardless. Without
+    this, a domain deployed by a previous process keeps resolving and
+    serving its old content forever, but can never trigger again (its
+    instance_id 404s on every POST .../trigger/{iom_id} log-monitor
+    attempts) - state that's silently, permanently broken in a way that's
+    easy to mistake for an actual bug in the trigger path itself."""
+    async with _endpoints_lock:
+        def _prune_endpoints() -> set[str]:
+            try:
+                endpoints = json.loads(ENDPOINTS_FILE.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                return set()
+            kept = {
+                domain: entry
+                for domain, entry in endpoints.items()
+                if entry.get("instance_id") in known_instance_ids
+            }
+            if kept != endpoints:
+                ENDPOINTS_FILE.write_text(json.dumps(kept, indent=2))
+            return set(kept)
+
+        surviving_domains = await asyncio.to_thread(_prune_endpoints)
+
+    async with _dns_zones_lock:
+        def _prune_zones() -> None:
+            try:
+                zones = json.loads(DNS_ZONES_FILE.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                return
+            # Every domain zones.json holds was registered alongside a
+            # matching endpoints.json entry (_register_dns_zone/
+            # _register_endpoints run together in deploy_static_site), so
+            # "still in the pruned endpoints" is exactly "still known".
+            kept = {domain: ip for domain, ip in zones.items() if domain in surviving_domains}
+            if kept != zones:
+                DNS_ZONES_FILE.write_text(json.dumps(kept, indent=2))
+
+        await asyncio.to_thread(_prune_zones)
+
+
 _CODE_FENCE_RE = re.compile(r"^```[a-zA-Z0-9]*\n(.*)\n```$", re.DOTALL)
 
 
@@ -357,44 +435,136 @@ def _strip_code_fence(text: str) -> str:
     return match.group(1) if match else text
 
 
-def _canary_domain(instance: CanaryInstance, task: Task) -> str:
-    """One label under CANARY_DOMAIN_TLD, unique per instance and matched by
-    the wildcard cert (*.canary.test) and nginx's host map (static-site/
-    nginx.conf) - both require exactly one label, no dots, so this can't
-    just be _slugify(task.prompt) alone (collisions across instances)."""
+# A real DNS hostname: dot-separated 1-63 char labels of alnum + internal
+# hyphens, at least two labels, 253 chars overall - deliberately not scoped
+# to any particular TLD, since SiteArtifact.domain is meant to be arbitrary
+# (see dns-resolver/resolver.py and static-site/nginx.conf, neither of which
+# assume *.canary.test either). Also the security boundary against a
+# manipulated/invented domain containing "/" or "..": it can only ever
+# become a single flat directory-name-shaped path segment.
+_VALID_DOMAIN_RE = re.compile(r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _fallback_domain(instance: CanaryInstance, task: Task) -> str:
+    """Deterministic, always-valid single-label domain under CANARY_DOMAIN_TLD
+    - used when the model's invented SiteArtifact.domain fails validation or
+    collides with one already deployed (see _register_dns_zone)."""
     return f"{_slugify(task.prompt)}-{instance.id[:8]}.{CANARY_DOMAIN_TLD}"
 
 
-async def _register_dns_zone(domain: str, ip: str) -> None:
+def _sanitize_domain(raw: str, instance: CanaryInstance, task: Task) -> str:
+    candidate = raw.strip().lower().rstrip(".")
+    return candidate if _VALID_DOMAIN_RE.match(candidate) else _fallback_domain(instance, task)
+
+
+async def _register_dns_zone(candidate_domain: str, ip: str, fallback_domain: str) -> str:
     """Adds/updates one entry in the zones file dns-resolver/resolver.py
-    reads. Locked + read-modify-write because concurrent deploys
-    (backend/api.py's asyncio.gather) can race on the same file."""
+    reads, returning the domain actually registered - `candidate_domain`
+    unless it's already taken by another instance, in which case
+    `fallback_domain` is used instead (arbitrary model-invented domains can
+    collide, e.g. two similar tasks both inventing "support-portal.com").
+    Locked + read-modify-write because concurrent deploys (backend/api.py's
+    asyncio.gather) can race on the same file."""
     async with _dns_zones_lock:
-        def _update() -> None:
+        def _update() -> str:
             DNS_ZONES_FILE.parent.mkdir(parents=True, exist_ok=True)
             try:
                 zones = json.loads(DNS_ZONES_FILE.read_text())
             except (FileNotFoundError, json.JSONDecodeError):
                 zones = {}
+            domain = candidate_domain if candidate_domain not in zones else fallback_domain
             zones[domain] = ip
             DNS_ZONES_FILE.write_text(json.dumps(zones, indent=2))
+            return domain
 
-        await asyncio.to_thread(_update)
+        return await asyncio.to_thread(_update)
 
 
-async def deploy_static_site(instance: CanaryInstance, artifact: str, task: Task) -> None:
+_DEFAULT_PKI_DIR = Path(__file__).resolve().parent.parent / "pki" / "out"
+# Same CA make ca-generate produces (pki/generate.sh) - reused here to issue
+# one leaf cert per deployed domain, since a single *.canary.test wildcard
+# cert can't cover arbitrary model-invented domains.
+PKI_DIR = Path(os.environ.get("PKI_DIR", _DEFAULT_PKI_DIR))
+
+
+async def _issue_leaf_cert(domain: str, site_dir: Path) -> None:
+    """Issues a TLS cert for `domain`, signed by the local CA in PKI_DIR, as
+    cert.pem/key.pem alongside index.html - static-site/nginx.conf picks
+    them up per-SNI straight out of the deployed site's own directory, so
+    (like content) this needs no nginx reload either.
+
+    Best-effort and silent: skipped entirely if the CA hasn't been generated
+    (make ca-generate) - the canary still works over plain HTTP, same as
+    before any of this existed. Also skipped for *.canary.test - the static
+    wildcard cert (pki/generate.sh) already covers that whole TLD, and
+    static-site/nginx.conf special-cases it ahead of any per-domain cert
+    lookup for exactly that reason, so one here would just go unused."""
+    if domain.endswith(f".{CANARY_DOMAIN_TLD}"):
+        return
+    ca_cert, ca_key = PKI_DIR / "ca.pem", PKI_DIR / "ca.key"
+    if not (ca_cert.exists() and ca_key.exists()):
+        return
+
+    def _issue() -> None:
+        key_path = site_dir / "key.pem"
+        cert_path = site_dir / "cert.pem"
+        csr_path = site_dir / "_csr.pem"
+        ext_path = site_dir / "_ext.cnf"
+        try:
+            subprocess.run(["openssl", "genrsa", "-out", str(key_path), "2048"], check=True, capture_output=True)
+            subprocess.run(
+                ["openssl", "req", "-new", "-key", str(key_path), "-subj", f"/CN={domain}", "-out", str(csr_path)],
+                check=True,
+                capture_output=True,
+            )
+            ext_path.write_text(
+                f"subjectAltName = DNS:{domain}\n"
+                "basicConstraints = critical, CA:FALSE\n"
+                "keyUsage = critical, digitalSignature, keyEncipherment\n"
+                "extendedKeyUsage = serverAuth\n"
+            )
+            subprocess.run(
+                [
+                    "openssl", "x509", "-req", "-in", str(csr_path),
+                    "-CA", str(ca_cert), "-CAkey", str(ca_key), "-CAcreateserial",
+                    "-out", str(cert_path), "-days", "825", "-sha256", "-extfile", str(ext_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            # Unlike a *static* ssl_certificate_key, nginx's root master
+            # process never gets to open this one at startup and hand the
+            # already-loaded key down to workers - static-site/nginx.conf
+            # selects it per-connection via a variable (keyed on SNI), so
+            # the unprivileged worker process has to read the file itself.
+            # openssl's default 0600 blocks that; these are throwaway
+            # per-canary demo keys, so world-readable is an acceptable
+            # tradeoff for not having to match container UIDs.
+            key_path.chmod(0o644)
+        finally:
+            csr_path.unlink(missing_ok=True)
+            ext_path.unlink(missing_ok=True)
+
+    await asyncio.to_thread(_issue)
+
+
+async def deploy_static_site(instance: CanaryInstance, artifact: SiteArtifact, task: Task) -> None:
     """Shared deploy for every canary type whose artifact is just a static
     HTML page (message board, impersonation server, fake answers page, ...):
     writes it under a domain-named directory in the static-site container's
     content volume, registers that domain with the DNS resolver so it
-    resolves to STATIC_SITE_IP, and points target_url at it. nginx routes
-    purely by Host header (static-site/nginx.conf) - no per-domain nginx
-    config or reload needed."""
-    domain = _canary_domain(instance, task)
+    resolves to STATIC_SITE_IP, issues it its own TLS cert (_issue_leaf_cert),
+    and points target_url at it. nginx routes purely by Host/SNI (static-site/
+    nginx.conf) - no per-domain nginx config or reload needed."""
+    domain = await _register_dns_zone(
+        _sanitize_domain(artifact.domain, instance, task),
+        STATIC_SITE_IP,
+        _fallback_domain(instance, task),
+    )
     site_dir = STATIC_SITE_CONTENT_DIR / domain
     await asyncio.to_thread(site_dir.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread((site_dir / "index.html").write_text, _strip_code_fence(artifact))
-    await _register_dns_zone(domain, STATIC_SITE_IP)
+    await asyncio.to_thread((site_dir / "index.html").write_text, _strip_code_fence(artifact.html))
+    await _issue_leaf_cert(domain, site_dir)
 
     regex = _canary_endpoint_regex(instance.canary_type_id)
     await _register_endpoints(
@@ -412,9 +582,9 @@ async def deploy_static_site(instance: CanaryInstance, artifact: str, task: Task
 
 
 CANARY_TYPE_HANDLERS: dict[str, CanaryTypeHandler] = {
-    "1": CanaryTypeHandler(build_prompt=build_impersonation_server_prompt, deploy=deploy_static_site),  # Impersonation server
-    "2": CanaryTypeHandler(build_prompt=build_fake_answers_prompt, deploy=deploy_static_site),  # Fake answers canary
-    "4": CanaryTypeHandler(build_prompt=build_message_board_prompt, deploy=deploy_static_site),  # Message board
+    "1": CanaryTypeHandler(build_prompt=build_impersonation_server_prompt, deploy=deploy_static_site, output_schema=SiteArtifact),  # Impersonation server
+    "2": CanaryTypeHandler(build_prompt=build_fake_answers_prompt, deploy=deploy_static_site, output_schema=SiteArtifact),  # Fake answers canary
+    "4": CanaryTypeHandler(build_prompt=build_message_board_prompt, deploy=deploy_static_site, output_schema=SiteArtifact),  # Message board
 }
 
 DEFAULT_CANARY_TYPE_HANDLER = CanaryTypeHandler(build_prompt=build_artifact_generation_prompt, deploy=deploy_noop)
@@ -444,7 +614,9 @@ async def deploy_canary_instance(
 
     # run_claude shells out (blocking); run it off the event loop so
     # concurrent deploys (see backend/api.py's asyncio.gather) don't serialize.
-    artifact = await asyncio.to_thread(run_claude, handler.build_prompt(instance, canary_type))
+    schema = handler.output_schema.model_json_schema() if handler.output_schema else None
+    result = await asyncio.to_thread(run_claude, handler.build_prompt(instance, canary_type), output_json_schema=schema)
+    artifact = handler.output_schema.model_validate_json(result) if handler.output_schema else result
     await handler.deploy(instance, artifact, task)
 
 

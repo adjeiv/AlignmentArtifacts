@@ -13,8 +13,8 @@ import type {
 export const mockCompanies: Company[] = [
   {
     id: "1",
-    name: "Deutsche Bank",
-    domains: ["db.com"],
+    name: "OpenAI",
+    domains: ["openai.com"],
     compliance_status: "at_risk",
   },
 ];
@@ -24,7 +24,7 @@ export const mockTasks: Task[] = [
     id: "1",
     company_id: "1",
     prompt: "RAG on company data",
-    models: [],
+    models: ["gpt-5"],
     constraints: [],
     iom_ids: ["6", "7", "8"],
   },
@@ -32,15 +32,15 @@ export const mockTasks: Task[] = [
     id: "2",
     company_id: "1",
     prompt: "Generate code output",
-    models: [],
+    models: ["gpt-5-codex"],
     constraints: [],
     iom_ids: ["1", "3", "5"],
   },
   {
     id: "3",
     company_id: "1",
-    prompt: "Solve exam",
-    models: [],
+    prompt: "Solve the ExploitGym exam",
+    models: ["gpt-5"],
     constraints: [],
     iom_ids: ["3", "4"],
   },
@@ -79,7 +79,7 @@ export const mockCanaryInstances: CanaryInstance[] = [
     triggered_iom_id: null,
     deployed_at: "2026-08-01T09:00:00Z",
     last_heartbeat_at: "2026-09-12T08:55:00Z",
-    target_url: "https://db-internal-portal-mirror.example.net",
+    target_url: "https://openai-internal-portal-mirror.example.net",
   },
   {
     id: "ci-2",

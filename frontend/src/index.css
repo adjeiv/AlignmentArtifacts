@@ -533,12 +533,31 @@ code,
   border-color: var(--red);
   color: var(--red);
 }
+/* An actual detection (a canary fired specifically for this IOM), not just
+   a coverage gap - a stronger signal than .gap, so it gets a filled
+   background plus a brief pulse to draw the eye, not just red text. */
+.mm-node.iom-shape.triggered {
+  border-color: var(--red);
+  background: var(--red-dim);
+  color: var(--red);
+  font-weight: 600;
+  animation: pulse-alert 1.6s ease-out 2;
+}
 .mm-node.iom-shape.dragging {
   cursor: grabbing;
   border-color: var(--accent);
   background: var(--bg-hover);
   z-index: 5;
   transition: none;
+}
+@keyframes pulse-alert {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--red-dim);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--red-dim);
+  }
 }
 .mm-legend {
   display: flex;
@@ -567,6 +586,10 @@ code,
 }
 .mm-legend .swatch.gap {
   border-color: var(--red);
+}
+.mm-legend .swatch.triggered {
+  border-color: var(--red);
+  background: var(--red-dim);
 }
 
 /* --- New task composer --- */

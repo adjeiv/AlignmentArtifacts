@@ -261,3 +261,31 @@ def test_list_canary_types():
     assert isinstance(canary_types, list) and len(canary_types) >= 1
     for canary_type in canary_types:
         assert {"id", "name"} <= canary_type.keys()
+
+
+# --- Startup hook: must never touch real files just from being tested ------
+
+
+def test_constructing_the_app_does_not_touch_real_canary_registration_files(tmp_path, monkeypatch):
+    """The module-level `client = TestClient(app)` above already fires
+    backend.api's startup event (that's how this bug was originally found -
+    it wiped the real, live dns-resolver/zones.json and
+    log-monitor/endpoints.json on a plain `uv run pytest`, since neither
+    file is monkeypatched anywhere in this module). CANARYNET_RECONCILE_ON_STARTUP
+    is what's supposed to prevent that - confirm it actually does, against
+    files standing in for the real ones, not the real ones themselves."""
+    monkeypatch.delenv("CANARYNET_RECONCILE_ON_STARTUP", raising=False)
+    zones_file = tmp_path / "zones.json"
+    endpoints_file = tmp_path / "endpoints.json"
+    zones_file.write_text('{"still-here.example.com": "127.0.0.1"}')
+    endpoints_file.write_text('{"still-here.example.com": {"instance_id": "not-a-real-instance", "endpoints": []}}')
+    monkeypatch.setattr("backend.agents.DNS_ZONES_FILE", zones_file)
+    monkeypatch.setattr("backend.agents.ENDPOINTS_FILE", endpoints_file)
+
+    with TestClient(app):
+        pass
+
+    assert zones_file.read_text() == '{"still-here.example.com": "127.0.0.1"}'
+    assert endpoints_file.read_text() == (
+        '{"still-here.example.com": {"instance_id": "not-a-real-instance", "endpoints": []}}'
+    )

@@ -49,5 +49,16 @@ openssl x509 -req -in "$OUT/wildcard.csr" -CA "$OUT/ca.pem" -CAkey "$OUT/ca.key"
 
 rm -f "$OUT/wildcard.csr" "$OUT/wildcard.ext"
 
+# static-site/nginx.conf selects ssl_certificate_key via a variable (so it
+# can pick a per-domain key for arbitrary canary domains, not just this
+# wildcard) - that makes nginx's unprivileged worker process (not the root
+# master, which only pre-loads *static* ssl_certificate_key paths at
+# startup) open this file itself, per-connection, for every TLS handshake
+# including ones that resolve back to this same wildcard. openssl's default
+# 0600 blocks that read. Same tradeoff backend/agents.py's
+# _issue_leaf_cert makes for per-canary keys - world-readable, not
+# world-writable, and this is a throwaway local demo key regardless.
+chmod 644 "$OUT/wildcard.key"
+
 echo "Generated wildcard cert for *.${TLD} (and CA, if it didn't already exist) in pki/out/"
 echo "Next: make ca-trust (trusts pki/out/ca.pem system-wide, if not already done), then reload/restart the static-site container."

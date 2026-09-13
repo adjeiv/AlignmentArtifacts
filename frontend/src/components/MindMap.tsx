@@ -40,13 +40,19 @@ const NODE_GAP = 64;
 const MARGIN = 84;
 const EDGE_PAD = 20;
 // Extra clearance enforced between any two boxes by the overlap-resolution
-// pass below, on top of whatever the radial layout already gives them.
-const OVERLAP_PADDING = 20;
+// pass below, on top of whatever the radial layout already gives them - the
+// visible margin between a canary and any other canary or IOM.
+const OVERLAP_PADDING = 28;
 // Bounding box used for the task node during overlap resolution - it isn't
 // actually measured (its real size depends on wrapped text), so this is a
 // generous estimate just to keep other nodes from crowding it.
 const TASK_HALF_W = 130;
 const TASK_HALF_H = 50;
+// How far the text/box-sizing pass below is allowed to shrink fonts and box
+// minimums (as a fraction of their full size) when a crowded diagram doesn't
+// fit the viewport even after the radii are scaled down - never so far that
+// labels stop being legible.
+const MIN_DENSITY_SCALE = 0.6;
 
 interface FitBox {
   width: number;
@@ -138,6 +144,40 @@ function greedyWrapLines(label: string, font: string, maxLineWidth: number): str
 }
 
 /**
+ * Scales the px size embedded in a CSS font shorthand by `factor` - used to
+ * shrink both the text-measurement font AND (via matching inline styles at
+ * render time, see `layout.densityScale`) the actually-rendered font, so the
+ * two stay in sync: measuring at one size while rendering at another would
+ * make every computed box wrong.
+ */
+function scaleFont(font: string, factor: number): string {
+  if (factor === 1) return font;
+  return font.replace(/(\d+(?:\.\d+)?)px/, (_, n: string) => `${Math.max(8, Math.round(parseFloat(n) * factor))}px`);
+}
+
+function scaleBoxOpts<
+  T extends {
+    minWidth: number;
+    maxWidth: number;
+    minHeight: number;
+    paddingX: number;
+    paddingY: number;
+    lineHeight?: number;
+  },
+>(opts: T, factor: number): T {
+  if (factor === 1) return opts;
+  return {
+    ...opts,
+    minWidth: Math.max(60, Math.round(opts.minWidth * factor)),
+    maxWidth: Math.max(90, Math.round(opts.maxWidth * factor)),
+    minHeight: Math.max(34, Math.round(opts.minHeight * factor)),
+    paddingX: Math.max(6, Math.round(opts.paddingX * factor)),
+    paddingY: Math.max(4, Math.round(opts.paddingY * factor)),
+    ...(opts.lineHeight !== undefined ? { lineHeight: Math.max(9, Math.round(opts.lineHeight * factor)) } : {}),
+  };
+}
+
+/**
  * Sizes a box to its own label: measures it with the real font, wraps at
  * word boundaries within [minWidth, maxWidth], and derives height from
  * however many lines that took - instead of every node sharing one
@@ -185,12 +225,24 @@ function fitTextBox(
  * the status and id lines completely unaccounted for, so a full-length
  * instance id would just overflow the node.
  */
-function fitCanaryBox(typeName: string, statusText: string, instanceId: string): FitBox {
-  const maxInner = CANARY_BOX_OPTS.maxWidth - CANARY_BOX_OPTS.paddingX * 2;
+function fitCanaryBox(typeName: string, statusText: string, instanceId: string, factor = 1): FitBox {
+  const boxOpts = scaleBoxOpts(CANARY_BOX_OPTS, factor);
+  const lineGap = Math.max(2, Math.round(CANARY_LINE_GAP * factor));
+  const maxInner = boxOpts.maxWidth - boxOpts.paddingX * 2;
   const segments = [
-    { text: typeName, font: CANARY_FONT, lineHeight: 16, gapBefore: 0 },
-    { text: statusText, font: CANARY_SUB_FONT, lineHeight: 14, gapBefore: CANARY_LINE_GAP },
-    { text: instanceId, font: CANARY_ID_FONT, lineHeight: 14, gapBefore: CANARY_LINE_GAP },
+    { text: typeName, font: scaleFont(CANARY_FONT, factor), lineHeight: Math.max(10, Math.round(16 * factor)), gapBefore: 0 },
+    {
+      text: statusText,
+      font: scaleFont(CANARY_SUB_FONT, factor),
+      lineHeight: Math.max(9, Math.round(14 * factor)),
+      gapBefore: lineGap,
+    },
+    {
+      text: instanceId,
+      font: scaleFont(CANARY_ID_FONT, factor),
+      lineHeight: Math.max(9, Math.round(14 * factor)),
+      gapBefore: lineGap,
+    },
   ];
 
   let contentWidth = 0;
@@ -202,10 +254,10 @@ function fitCanaryBox(typeName: string, statusText: string, instanceId: string):
   }
 
   const width = Math.min(
-    CANARY_BOX_OPTS.maxWidth,
-    Math.max(CANARY_BOX_OPTS.minWidth, Math.ceil(contentWidth) + CANARY_BOX_OPTS.paddingX * 2),
+    boxOpts.maxWidth,
+    Math.max(boxOpts.minWidth, Math.ceil(contentWidth) + boxOpts.paddingX * 2),
   );
-  const height = Math.max(CANARY_BOX_OPTS.minHeight, Math.ceil(contentHeight) + CANARY_BOX_OPTS.paddingY * 2);
+  const height = Math.max(boxOpts.minHeight, Math.ceil(contentHeight) + boxOpts.paddingY * 2);
   return { width, height };
 }
 
@@ -268,13 +320,60 @@ interface Particle {
 }
 
 /**
+ * Bounding box that encloses a whole set of boxes placed at `baseX/baseY +
+ * (dx, dy)` - used to treat an IOM node and all the canary leaves that ride
+ * along with it (they share one drag offset, see dragOffsets) as a single
+ * rigid obstacle for collision purposes while dragging. Conservative: if
+ * this merged box doesn't overlap something, none of its constituent boxes
+ * do either, since each is a subset of it.
+ */
+function mergedBounds(
+  boxes: { baseX: number; baseY: number; hw: number; hh: number }[],
+  dx: number,
+  dy: number,
+): { cx: number; cy: number; hw: number; hh: number } {
+  let left = Infinity;
+  let right = -Infinity;
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const b of boxes) {
+    left = Math.min(left, b.baseX + dx - b.hw);
+    right = Math.max(right, b.baseX + dx + b.hw);
+    top = Math.min(top, b.baseY + dy - b.hh);
+    bottom = Math.max(bottom, b.baseY + dy + b.hh);
+  }
+  return { cx: (left + right) / 2, cy: (top + bottom) / 2, hw: (right - left) / 2, hh: (bottom - top) / 2 };
+}
+
+/** Clamps a center coordinate so [pos-half, pos+half] stays within
+ * [pad, size-pad]; if the box itself is wider/taller than that (viewport
+ * smaller than a single node), centers it instead of producing an inverted
+ * range. */
+function clampToBounds(pos: number, half: number, size: number, pad: number): number {
+  const min = half + pad;
+  const max = size - half - pad;
+  if (min > max) return size / 2;
+  return Math.min(max, Math.max(min, pos));
+}
+
+/**
  * Nudges any two overlapping axis-aligned boxes apart (in place) along
  * whichever axis needs the least push, so the radial layout's analytic
  * spacing (which treats every node as roughly the same size) can't leave
  * real, differently-shaped boxes overlapping - the fallback safety net for
- * "if two elements overlap, they should drift apart".
+ * "if two elements overlap, they should drift apart". When `bounds` is
+ * given, every non-fixed particle is also re-clamped to the viewport at the
+ * end of EACH iteration (not just once at the very end) - clamping only
+ * after all overlap-resolution is done can push a just-separated box back
+ * into the one next to it, which is exactly the "still overlapping"
+ * regression this guards against.
  */
-function resolveOverlaps(particles: Particle[], padding: number, iterations = 24) {
+function resolveOverlaps(
+  particles: Particle[],
+  padding: number,
+  iterations = 24,
+  bounds?: { w: number; h: number; pad: number },
+) {
   for (let iter = 0; iter < iterations; iter++) {
     let moved = false;
     for (let i = 0; i < particles.length; i++) {
@@ -304,6 +403,18 @@ function resolveOverlaps(particles: Particle[], padding: number, iterations = 24
             a.y -= (dir * overlapY) / 2;
             b.y += (dir * overlapY) / 2;
           }
+        }
+      }
+    }
+    if (bounds) {
+      for (const p of particles) {
+        if (p.fixed) continue;
+        const cx = clampToBounds(p.x, p.hw, bounds.w, bounds.pad);
+        const cy = clampToBounds(p.y, p.hh, bounds.h, bounds.pad);
+        if (cx !== p.x || cy !== p.y) {
+          p.x = cx;
+          p.y = cy;
+          moved = true;
         }
       }
     }
@@ -360,28 +471,10 @@ export function MindMap({
   const layout = useMemo(() => {
     if (!viewport) return null;
 
-    const canaryBoxes = new Map<string, FitBox>();
-    for (const ci of canaryInstances) {
-      const typeName = canaryTypeById.get(ci.canary_type_id)?.name ?? ci.canary_type_id;
-      const statusText = ci.triggered ? "triggered" : ci.deployment_health;
-      canaryBoxes.set(ci.id, fitCanaryBox(typeName, statusText, ci.id));
-    }
-
-    const iomBoxes = new Map<string, FitBox>();
-    const iomBox = (iomId: string): FitBox => {
-      let box = iomBoxes.get(iomId);
-      if (!box) {
-        const name = iomById.get(iomId)?.name ?? iomId;
-        box = fitTextBox(name, IOM_FONT, IOM_BOX_OPTS);
-        iomBoxes.set(iomId, box);
-      }
-      return box;
-    };
-    for (const id of iomIds) iomBox(id);
-
     // Each canary instance appears exactly once, fanned under its "primary"
     // parent (the first of the task's IOMs it covers). Any other IOM it also
-    // covers is recorded as an extra edge instead of a duplicate node.
+    // covers is recorded as an extra edge instead of a duplicate node. This
+    // grouping doesn't depend on box sizes, so it's computed once up front.
     const childrenByIom = new Map<string, CanaryInstance[]>();
     const extraEdges: ExtraEdge[] = [];
     for (const ci of canaryInstances) {
@@ -392,27 +485,57 @@ export function MindMap({
       childrenByIom.get(primary)!.push(ci);
       for (const iomId of rest) extraEdges.push({ iomId, canaryId: ci.id });
     }
-
-    const canaryWidths = [...canaryBoxes.values()].map((b) => b.width);
-    const iomWidths = [...iomBoxes.values()].map((b) => b.width);
-    const maxCanaryWidth = canaryWidths.length ? Math.max(...canaryWidths) : CANARY_BOX_OPTS.minWidth;
-    const maxIomWidth = iomWidths.length ? Math.max(...iomWidths) : IOM_BOX_OPTS.minWidth;
-
     const maxChildren = iomIds.reduce((m, id) => Math.max(m, childrenByIom.get(id)?.length ?? 0), 1);
     const spreadDeg = Math.min(84, 26 * (maxChildren - 1));
-    // Both formulas take a single "how big is this node" number even though
-    // real boxes vary in size - the widest one actually present is the
-    // conservative choice; resolveOverlaps() below cleans up whatever this
-    // analytic approximation still gets wrong.
-    const idealLeafRadius = fanRadius(maxChildren, spreadDeg, maxCanaryWidth, NODE_GAP, 150);
-    const idealBranchRadius = ringRadius(branchCount, maxIomWidth, NODE_GAP, 210);
-    const idealDiameter = 2 * (idealBranchRadius + idealLeafRadius + maxCanaryWidth / 2 + MARGIN);
 
     const available = Math.max(160, Math.min(viewport.w, viewport.h) - 2 * EDGE_PAD);
-    // Only the RADII shrink to fit a tight viewport - never the boxes
-    // themselves, since a box smaller than its own fitted text is exactly
-    // the overflow this is meant to fix. resolveOverlaps() below is what
-    // absorbs a tightly-scaled radius leaving boxes too close together.
+
+    // Sizes every box and the ideal (unconstrained) diagram diameter for a
+    // given text/box density `factor`. Called once at full size, and again
+    // at a shrunk factor if that didn't fit - see below.
+    function sizeAtFactor(factor: number) {
+      const canaryBoxes = new Map<string, FitBox>();
+      for (const ci of canaryInstances) {
+        const typeName = canaryTypeById.get(ci.canary_type_id)?.name ?? ci.canary_type_id;
+        const statusText = ci.triggered ? "triggered" : ci.deployment_health;
+        canaryBoxes.set(ci.id, fitCanaryBox(typeName, statusText, ci.id, factor));
+      }
+      const iomBoxes = new Map<string, FitBox>();
+      for (const id of iomIds) {
+        const name = iomById.get(id)?.name ?? id;
+        iomBoxes.set(id, fitTextBox(name, scaleFont(IOM_FONT, factor), scaleBoxOpts(IOM_BOX_OPTS, factor)));
+      }
+      const canaryWidths = [...canaryBoxes.values()].map((b) => b.width);
+      const iomWidths = [...iomBoxes.values()].map((b) => b.width);
+      const maxCanaryWidth = canaryWidths.length ? Math.max(...canaryWidths) : CANARY_BOX_OPTS.minWidth * factor;
+      const maxIomWidth = iomWidths.length ? Math.max(...iomWidths) : IOM_BOX_OPTS.minWidth * factor;
+      // Both formulas take a single "how big is this node" number even
+      // though real boxes vary in size - the widest one actually present is
+      // the conservative choice; resolveOverlaps() below cleans up whatever
+      // this analytic approximation still gets wrong.
+      const idealLeafRadius = fanRadius(maxChildren, spreadDeg, maxCanaryWidth, NODE_GAP, 150 * factor);
+      const idealBranchRadius = ringRadius(branchCount, maxIomWidth, NODE_GAP, 210 * factor);
+      const idealDiameter = 2 * (idealBranchRadius + idealLeafRadius + maxCanaryWidth / 2 + MARGIN);
+      return { canaryBoxes, iomBoxes, idealLeafRadius, idealBranchRadius, idealDiameter };
+    }
+
+    const full = sizeAtFactor(1);
+    // Radii alone can only absorb so much of a too-big diagram before nodes
+    // sit right on top of each other - if even the fully-shrunk radii would
+    // still need heavy overlap-resolution to fit, shrink the actual text and
+    // box minimums too (down to MIN_DENSITY_SCALE), THEN scale radii on top
+    // of that smaller baseline, so the diagram gets less crowded instead of
+    // just more tightly packed.
+    const densityScale = full.idealDiameter > available ? Math.max(MIN_DENSITY_SCALE, available / full.idealDiameter) : 1;
+    const sized = densityScale < 1 ? sizeAtFactor(densityScale) : full;
+    const { canaryBoxes, iomBoxes, idealLeafRadius, idealBranchRadius, idealDiameter } = sized;
+
+    const iomBox = (iomId: string): FitBox => iomBoxes.get(iomId)!;
+
+    // Only the RADII shrink further to fit a tight viewport - the boxes
+    // themselves are already at their (possibly shrunk) fitted-text size.
+    // resolveOverlaps() below is what absorbs a tightly-scaled radius
+    // leaving boxes too close together.
     const scale = Math.min(1, available / idealDiameter);
     const branchRadius = idealBranchRadius * scale;
     const leafRadius = idealLeafRadius * scale;
@@ -440,8 +563,11 @@ export function MindMap({
     }
 
     // Collision pass: flatten every box into a particle (task node fixed as
-    // the anchor, everything else free to drift), resolve overlaps, clamp to
-    // the viewport, then write the adjusted positions back.
+    // the anchor, everything else free to drift), resolve overlaps against
+    // the viewport bounds together (see resolveOverlaps' `bounds` param -
+    // clamping only after overlap-resolution finishes can push a
+    // just-separated box back into its neighbor), then write the adjusted
+    // positions back.
     type Ref = { kind: "branch"; bi: number } | { kind: "child"; bi: number; ci: number };
     const particles: (Particle & { ref: Ref | null })[] = [
       { x: cx, y: cy, hw: TASK_HALF_W, hh: TASK_HALF_H, fixed: true, ref: null },
@@ -460,12 +586,10 @@ export function MindMap({
       });
     });
 
-    resolveOverlaps(particles, OVERLAP_PADDING);
+    resolveOverlaps(particles, OVERLAP_PADDING, 24, { w: viewport.w, h: viewport.h, pad: EDGE_PAD });
 
     for (const p of particles) {
       if (!p.ref) continue;
-      p.x = Math.min(viewport.w - p.hw - EDGE_PAD, Math.max(p.hw + EDGE_PAD, p.x));
-      p.y = Math.min(viewport.h - p.hh - EDGE_PAD, Math.max(p.hh + EDGE_PAD, p.y));
       if (p.ref.kind === "branch") {
         branches[p.ref.bi].baseX = p.x;
         branches[p.ref.bi].baseY = p.y;
@@ -475,7 +599,7 @@ export function MindMap({
       }
     }
 
-    return { cx, cy, branches, extraEdges, w: viewport.w, h: viewport.h };
+    return { cx, cy, branches, extraEdges, w: viewport.w, h: viewport.h, densityScale };
     // fontsReady isn't read directly above, but measureTextWidth's canvas
     // context depends on the webfont being loaded - this just forces one
     // recompute once it is.
@@ -492,12 +616,6 @@ export function MindMap({
     null,
   );
 
-  function clamp(base: number, delta: number, nodeRadius: number, bound: number): number {
-    const min = nodeRadius + 8 - base;
-    const max = bound - nodeRadius - 8 - base;
-    return Math.min(max, Math.max(min, delta));
-  }
-
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>, branch: IomBranch) {
     e.currentTarget.setPointerCapture(e.pointerId);
     const current = dragOffsets[branch.iomId] ?? { dx: 0, dy: 0 };
@@ -511,13 +629,44 @@ export function MindMap({
     setDraggingId(branch.iomId);
   }
 
+  // Dragging an IOM moves it and every canary leaf fanned off it together
+  // (they share this one offset - see the "rides along" note above
+  // dragOffsets). To guarantee the "no elements ever overlap" invariant
+  // holds during dragging too, not just at initial layout, the whole
+  // dragged family is treated as one rigid obstacle (mergedBounds) and
+  // pushed out of every other node's box (the task node, every other IOM at
+  // its own current offset, and their canary leaves) via the same
+  // resolveOverlaps pass used for the initial layout - then the resulting
+  // family position is clamped to the viewport.
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>, branch: IomBranch) {
     const ds = dragState.current;
     if (!ds || !layout || ds.id !== branch.iomId) return;
     const rawDx = ds.originDx + (e.clientX - ds.startX);
     const rawDy = ds.originDy + (e.clientY - ds.startY);
-    const dx = clamp(branch.baseX, rawDx, branch.width / 2, layout.w);
-    const dy = clamp(branch.baseY, rawDy, branch.height / 2, layout.h);
+
+    const familyBoxes = [
+      { baseX: branch.baseX, baseY: branch.baseY, hw: branch.width / 2, hh: branch.height / 2 },
+      ...branch.children.map((c) => ({ baseX: c.baseX, baseY: c.baseY, hw: c.width / 2, hh: c.height / 2 })),
+    ];
+
+    const obstacles: Particle[] = [
+      { x: layout.cx, y: layout.cy, hw: TASK_HALF_W, hh: TASK_HALF_H, fixed: true },
+    ];
+    for (const b of layout.branches) {
+      if (b.iomId === branch.iomId) continue;
+      const off = dragOffsets[b.iomId] ?? { dx: 0, dy: 0 };
+      obstacles.push({ x: b.baseX + off.dx, y: b.baseY + off.dy, hw: b.width / 2, hh: b.height / 2, fixed: true });
+      for (const c of b.children) {
+        obstacles.push({ x: c.baseX + off.dx, y: c.baseY + off.dy, hw: c.width / 2, hh: c.height / 2, fixed: true });
+      }
+    }
+
+    const merged = mergedBounds(familyBoxes, rawDx, rawDy);
+    const family: Particle = { x: merged.cx, y: merged.cy, hw: merged.hw, hh: merged.hh, fixed: false };
+    resolveOverlaps([family, ...obstacles], OVERLAP_PADDING, 24, { w: layout.w, h: layout.h, pad: EDGE_PAD });
+
+    const dx = rawDx + (family.x - merged.cx);
+    const dy = rawDy + (family.y - merged.cy);
     setDragOffsets((prev) => ({ ...prev, [ds.id]: { dx, dy } }));
   }
 
@@ -540,6 +689,22 @@ export function MindMap({
     return map;
   }, [layout]);
 
+  // A triggered canary names the one IOM it was actually detected under
+  // (triggered_iom_id) - not just whichever IOM happens to be its primary
+  // parent in this layout, since a canary covering several of the task's
+  // IOMs (see extraEdges) only fires for the specific one an agent actually
+  // hit. That IOM's node gets the strongest visual signal in this view: an
+  // actual detection, not just a coverage gap (see .gap).
+  const triggeredIomIds = useMemo(
+    () =>
+      new Set(
+        canaryInstances
+          .filter((ci) => ci.triggered && ci.triggered_iom_id)
+          .map((ci) => ci.triggered_iom_id as string),
+      ),
+    [canaryInstances],
+  );
+
   return (
     <div className="mindmap-root">
       <div className="mm-legend">
@@ -551,6 +716,9 @@ export function MindMap({
         </span>
         <span className="item">
           <span className="swatch swatch-square gap" /> IOM with no canary coverage
+        </span>
+        <span className="item">
+          <span className="swatch swatch-square triggered" /> IOM triggered
         </span>
       </div>
       <div className="mindmap-canvas" ref={canvasRef}>
@@ -564,20 +732,35 @@ export function MindMap({
                 const off = dragOffsets[b.iomId] ?? { dx: 0, dy: 0 };
                 const bx = b.baseX + off.dx;
                 const by = b.baseY + off.dy;
+                const branchTriggered = triggeredIomIds.has(b.iomId);
                 return (
                   <g key={bi}>
-                    <line x1={layout.cx} y1={layout.cy} x2={bx} y2={by} stroke="var(--border-strong)" strokeWidth={1.5} />
-                    {b.children.map((c, ci) => (
-                      <line
-                        key={ci}
-                        x1={bx}
-                        y1={by}
-                        x2={c.baseX + off.dx}
-                        y2={c.baseY + off.dy}
-                        stroke="var(--border-strong)"
-                        strokeWidth={1.5}
-                      />
-                    ))}
+                    <line
+                      x1={layout.cx}
+                      y1={layout.cy}
+                      x2={bx}
+                      y2={by}
+                      stroke={branchTriggered ? "var(--red)" : "var(--border-strong)"}
+                      strokeWidth={branchTriggered ? 2.5 : 1.5}
+                    />
+                    {b.children.map((c, ci) => {
+                      // The specific canary that actually fired this IOM,
+                      // not just any child of it - a canary covering more
+                      // than one of the task's IOMs (see extraEdges below)
+                      // only trips one at a time.
+                      const edgeTriggered = c.canary.triggered && c.canary.triggered_iom_id === b.iomId;
+                      return (
+                        <line
+                          key={ci}
+                          x1={bx}
+                          y1={by}
+                          x2={c.baseX + off.dx}
+                          y2={c.baseY + off.dy}
+                          stroke={edgeTriggered ? "var(--red)" : "var(--border-strong)"}
+                          strokeWidth={edgeTriggered ? 2.5 : 1.5}
+                        />
+                      );
+                    })}
                   </g>
                 );
               })}
@@ -587,6 +770,7 @@ export function MindMap({
                 if (!iomBranch || !owner) return null;
                 const iomOff = dragOffsets[iomBranch.iomId] ?? { dx: 0, dy: 0 };
                 const leafOff = dragOffsets[owner.iomId] ?? { dx: 0, dy: 0 };
+                const edgeTriggered = owner.leaf.canary.triggered && owner.leaf.canary.triggered_iom_id === e.iomId;
                 return (
                   <line
                     key={`extra-${i}`}
@@ -594,9 +778,9 @@ export function MindMap({
                     y1={iomBranch.baseY + iomOff.dy}
                     x2={owner.leaf.baseX + leafOff.dx}
                     y2={owner.leaf.baseY + leafOff.dy}
-                    stroke="var(--border-strong)"
+                    stroke={edgeTriggered ? "var(--red)" : "var(--border-strong)"}
                     strokeDasharray="3 5"
-                    strokeWidth={1.5}
+                    strokeWidth={edgeTriggered ? 2.5 : 1.5}
                   />
                 );
               })}
@@ -609,12 +793,20 @@ export function MindMap({
             {layout.branches.map((b) => {
               const iom = iomById.get(b.iomId);
               const off = dragOffsets[b.iomId] ?? { dx: 0, dy: 0 };
+              const isTriggered = triggeredIomIds.has(b.iomId);
               return (
                 <div
                   key={b.iomId}
-                  className={`mm-node iom-shape${b.children.length === 0 ? " gap" : ""}${draggingId === b.iomId ? " dragging" : ""}`}
-                  style={{ left: b.baseX + off.dx, top: b.baseY + off.dy, width: b.width, minHeight: b.height }}
-                  title={iom?.name}
+                  className={`mm-node iom-shape${b.children.length === 0 ? " gap" : ""}${isTriggered ? " triggered" : ""}${draggingId === b.iomId ? " dragging" : ""}`}
+                  style={{
+                    left: b.baseX + off.dx,
+                    top: b.baseY + off.dy,
+                    width: b.width,
+                    minHeight: b.height,
+                    fontSize: 11 * layout.densityScale,
+                    padding: 10 * layout.densityScale,
+                  }}
+                  title={isTriggered ? `${iom?.name ?? b.iomId} - triggered` : iom?.name}
                   onPointerDown={(e) => handlePointerDown(e, b)}
                   onPointerMove={(e) => handlePointerMove(e, b)}
                   onPointerUp={handlePointerUp}
@@ -636,12 +828,24 @@ export function MindMap({
                     key={c.canary.id}
                     type="button"
                     className="mm-node canary-shape"
-                    style={{ left: x, top: y, width: c.width, minHeight: c.height }}
+                    style={{
+                      left: x,
+                      top: y,
+                      width: c.width,
+                      minHeight: c.height,
+                      fontSize: 12 * layout.densityScale,
+                      padding: `${10 * layout.densityScale}px ${22 * layout.densityScale}px`,
+                      gap: 2 * layout.densityScale,
+                    }}
                     onClick={() => onSelectCanary(c.canary.id)}
                   >
                     <div className="mm-title">{typeName}</div>
-                    <div className="mm-sub">{c.canary.triggered ? "triggered" : c.canary.deployment_health}</div>
-                    <div className="mm-sub mono">{c.canary.id}</div>
+                    <div className="mm-sub" style={{ fontSize: 10 * layout.densityScale, marginTop: 2 * layout.densityScale }}>
+                      {c.canary.triggered ? "triggered" : c.canary.deployment_health}
+                    </div>
+                    <div className="mm-sub mono" style={{ fontSize: 10 * layout.densityScale, marginTop: 2 * layout.densityScale }}>
+                      {c.canary.id}
+                    </div>
                   </button>
                 );
               });
