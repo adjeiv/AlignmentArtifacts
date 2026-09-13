@@ -6,8 +6,11 @@ condition, and IOM - the numbers a whitepaper needs, not a single anecdote.
 Usage:
     uv run python scripts/run_benchmark.py [scenario ...] [--repeats N]
         [--fixtures-dir DIR] [--agent-model MODEL] [--backend-url URL]
-        [--conditions aligned misaligned] [--out results.json]
-        [--summary-out summary.md]
+        [--conditions aligned misaligned] [--out-dir DIR]
+
+Each scenario writes its own <out-dir>/<NN>/benchmark_results.json +
+benchmark_summary.md (NN = the scenario id's leading number, e.g. "01") -
+running scenarios separately never clobbers another one's output.
 
 Preconditions (this script is a client, same as cheatsheet.py/
 monitor_canaries.py - it starts nothing itself):
@@ -341,7 +344,18 @@ def render_summary(summary: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def scenario_output_dir(out_dir: Path, scenario_id: str) -> Path:
+    """<out_dir>/<NN>/ where NN is the scenario id's leading number (e.g.
+    "01" from "01_exam_benchmark_cheating") - falls back to the full id if
+    a scenario has no numeric prefix. Every scenario gets its own directory
+    so running scenarios separately (or re-running one) never clobbers
+    another's results/summary, the way a single shared output file did."""
+    m = re.match(r"^(\d+)", scenario_id)
+    return out_dir / (m.group(1) if m else scenario_id)
+
+
 def save_results(path: Path, results: list[TrialResult]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps([asdict(r) for r in results], indent=2))
 
 
@@ -373,8 +387,12 @@ def main() -> int:
     )
     parser.add_argument("--poll-interval", type=float, default=2.0)
     parser.add_argument("--testing-dir", type=Path, default=DEFAULT_TESTING_DIR)
-    parser.add_argument("--out", type=Path, default=Path("benchmark_results.json"))
-    parser.add_argument("--summary-out", type=Path, default=Path("benchmark_summary.md"))
+    parser.add_argument(
+        "--out-dir", type=Path, default=Path("."),
+        help="Base dir - each scenario writes its own <out-dir>/<NN>/benchmark_results.json and "
+             "benchmark_summary.md (NN = the scenario id's leading number), so separate runs "
+             "(e.g. one scenario at a time) never overwrite another scenario's results.",
+    )
     args = parser.parse_args()
 
     base = args.backend_url.rstrip("/")
@@ -392,9 +410,10 @@ def main() -> int:
     total = len(scenarios) * len(args.conditions) * args.repeats
     print(f"running {total} trial(s): {len(scenarios)} scenario(s) x {len(args.conditions)} condition(s) x {args.repeats} repeat(s)")
 
-    results: list[TrialResult] = []
+    results_by_scenario: dict[str, list[TrialResult]] = defaultdict(list)
     done = 0
     for scenario in scenarios:
+        scenario_dir = scenario_output_dir(args.out_dir, scenario.id)
         for condition in args.conditions:
             for repeat in range(args.repeats):
                 done += 1
@@ -408,12 +427,16 @@ def main() -> int:
                         fixture_used=False, agent_error=True, error=str(e),
                         started_at=_now_iso(), finished_at=_now_iso(),
                     )
-                results.append(result)
-                save_results(args.out, results)  # incremental, so a crash mid-run doesn't lose everything
+                results_by_scenario[scenario.id].append(result)
+                # incremental, so a crash mid-run doesn't lose everything - and
+                # per-scenario, so a rerun of a different scenario can't clobber this one
+                save_results(scenario_dir / "benchmark_results.json", results_by_scenario[scenario.id])
 
-    summary = aggregate(results)
-    args.summary_out.write_text(render_summary(summary))
-    print(f"\nwrote {args.out} ({len(results)} trial(s)) and {args.summary_out}")
+    for scenario_id, results in results_by_scenario.items():
+        scenario_dir = scenario_output_dir(args.out_dir, scenario_id)
+        summary = aggregate(results)
+        (scenario_dir / "benchmark_summary.md").write_text(render_summary(summary))
+        print(f"wrote {scenario_dir}/benchmark_results.json ({len(results)} trial(s)) and {scenario_dir}/benchmark_summary.md")
     return 0
 
 

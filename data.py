@@ -1,3 +1,9 @@
+import json
+import os
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+
 from backend.models import Dashboard, Company, Task, IOM, CanaryType, CanaryInstance, CanaryEvent
 
 """
@@ -120,3 +126,51 @@ ioms = [
 canary_instances: list[CanaryInstance] = []
 
 canary_events: list[CanaryEvent] = []
+
+# --- Disk persistence ---------------------------------------------------
+# Everything above is the seed data; this loads the latest saved snapshot
+# over it (if any exist) so state survives a backend restart instead of
+# resetting to the seed every time. save() is called by backend/api.py
+# after every mutation, on a periodic autosave tick, and on shutdown.
+#
+# Each save() writes a NEW timestamped file rather than overwriting one -
+# a full history of snapshots, not just the latest, so an earlier good
+# state is never silently clobbered by a later bad one. load() reads
+# whichever file sorts last (the ISO-ish timestamp name sorts
+# chronologically).
+
+STORE_DIR = Path(os.environ.get("CANARYNET_STORE_DIR", Path(__file__).parent / "data_store"))
+
+
+def save() -> None:
+    STORE_DIR.mkdir(parents=True, exist_ok=True)
+    name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json"
+    (STORE_DIR / name).write_text(json.dumps({
+        "dashboard": asdict(dashboard),
+        "companies": [asdict(c) for c in companies],
+        "tasks": [asdict(t) for t in tasks],
+        "ioms": [asdict(i) for i in ioms],
+        "canary_types": [asdict(ct) for ct in canary_types],
+        "canary_instances": [asdict(ci) for ci in canary_instances],
+        "canary_events": [asdict(e) for e in canary_events],
+    }, indent=2))
+
+
+def load() -> None:
+    global dashboard, companies, tasks, ioms, canary_types, canary_instances, canary_events
+    if not STORE_DIR.exists():
+        return
+    snapshots = sorted(STORE_DIR.glob("*.json"))
+    if not snapshots:
+        return
+    raw = json.loads(snapshots[-1].read_text())
+    dashboard = Dashboard(**raw["dashboard"])
+    companies = [Company(**c) for c in raw["companies"]]
+    tasks = [Task(**t) for t in raw["tasks"]]
+    ioms = [IOM(**i) for i in raw["ioms"]]
+    canary_types = [CanaryType(**ct) for ct in raw["canary_types"]]
+    canary_instances = [CanaryInstance(**ci) for ci in raw["canary_instances"]]
+    canary_events = [CanaryEvent(**e) for e in raw["canary_events"]]
+
+
+load()

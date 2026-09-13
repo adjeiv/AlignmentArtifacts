@@ -20,3 +20,4 @@ static-site/content/*/
 dns-resolver/zones.json
 log-monitor/endpoints.json
 static-site/logs/
+data_store/

@@ -25,6 +25,16 @@ from backend.github_canary import run_github_poller
 from backend.thinkst import run_thinkst_poller
 
 
+async def _autosave_loop(interval: float = 5.0) -> None:
+    """Catches mutations no explicit data.save() call is next to - e.g.
+    deploy_canary_instance filling in deployment_health/target_url mid-flight,
+    or a trigger landing via the Thinkst/GitHub pollers below - so a crash
+    loses at most `interval` seconds, not everything since the last restart."""
+    while True:
+        await asyncio.sleep(interval)
+        data.save()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Both no-op immediately unless configured (THINKST_ALERT_EMAIL /
@@ -33,9 +43,12 @@ async def lifespan(app: FastAPI):
     # log-monitor/ can't cover since that activity never touches our nginx.
     thinkst_poller = asyncio.create_task(run_thinkst_poller(data.canary_instances, _trigger_canary_instance))
     github_poller = asyncio.create_task(run_github_poller(data.canary_instances, _trigger_canary_instance))
+    autosave = asyncio.create_task(_autosave_loop())
     yield
     thinkst_poller.cancel()
     github_poller.cancel()
+    autosave.cancel()
+    data.save()  # catch whatever happened since the last autosave tick
 
 
 app = FastAPI(title="Alignment Artifacts API", lifespan=lifespan)
@@ -161,6 +174,7 @@ async def _deploy_canaries(task: data.Task, instances: list[CanaryInstance]) -> 
     await asyncio.gather(
         *(deploy_canary_instance(ci, task, data.canary_types) for ci in instances)
     )
+    data.save()
 
 
 @app.post("/api/companies/{company_id}/tasks", status_code=201)
@@ -181,6 +195,7 @@ def create_task(
     # "genuinely no canary coverage", never "hasn't been spawned yet".
     instances = spawn_canary_instances_for_task(task, data.ioms, data.canary_types)
     data.canary_instances.extend(instances)
+    data.save()
 
     background_tasks.add_task(_deploy_canaries, task, instances)
     return task
