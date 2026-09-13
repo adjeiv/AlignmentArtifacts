@@ -854,3 +854,59 @@ code,
   font-size: 13px;
   color: var(--text-dim);
 }
+
+/* --- Top bar nav link (added alongside the brand mark) --- */
+
+.nav-link {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.nav-link:hover {
+  color: var(--text);
+}
+
+/* --- IOM catalog page --- */
+
+.iom-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.iom-catalog-card {
+  padding: 16px 18px;
+}
+
+.iom-catalog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.iom-catalog-canaries {
+  margin-bottom: 10px;
+}
+
+.iom-catalog-tactic {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.iom-catalog-techniques {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.iom-catalog-techniques a {
+  text-decoration: none;
+}
+.iom-catalog-techniques a:hover {
+  filter: brightness(1.1);
+}
+
+.iom-catalog-rationale {
+  margin-top: 8px;
+  line-height: 1.5;
+}

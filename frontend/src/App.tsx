@@ -3,6 +3,7 @@ import { USE_MOCK } from "./api/client";
 import { Dashboard } from "./pages/Dashboard";
 import { CompanyDetail } from "./pages/CompanyDetail";
 import { CanaryStatus } from "./pages/CanaryStatus";
+import { IOMCatalog } from "./pages/IOMCatalog";
 
 export function App() {
   return (
@@ -15,6 +16,9 @@ export function App() {
           </svg>
           canarynet
         </Link>
+        <Link to="/ioms" className="nav-link">
+          Indicators &amp; ATT&amp;CK
+        </Link>
         {USE_MOCK && (
           <span className="mock-badge" title="VITE_USE_MOCK is not set to false - showing fixture data, not the real API">
             MOCK DATA
@@ -23,6 +27,7 @@ export function App() {
       </div>
       <Routes>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/ioms" element={<IOMCatalog />} />
         <Route path="/companies/:companyId" element={<CompanyDetail />} />
         <Route path="/canaries/:canaryInstanceId" element={<CanaryStatus />} />
       </Routes>
