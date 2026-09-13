@@ -1,4 +1,4 @@
-.PHONY: install up backend frontend test ca-generate ca-trust ca-untrust dns-use dns-restore
+.PHONY: install up backend frontend test monitor cheatsheet ca-generate ca-trust ca-untrust dns-use dns-restore
 
 # One-time (or after pulling dependency changes): installs both halves.
 install:
@@ -26,6 +26,22 @@ frontend:
 # Backend test suite (see CLAUDE.md).
 test:
 	uv run pytest
+
+# Live-tails canary trigger events for one task: `make monitor <task-id>`.
+# Requires the backend to be running (`make backend` / `make up`). The task
+# id is a positional arg, not TASK=... - the catch-all `%:` rule below
+# swallows it so make doesn't also treat it as a target name.
+monitor:
+	@uv run python scripts/monitor_canaries.py $(filter-out $@,$(MAKECMDGOALS))
+
+# Writes /tmp/extra_assets from one task's deployed canaries: `make
+# cheatsheet <task-id>` (see testing/README.md). Requires the backend to be
+# running. Same positional-arg trick as `monitor` above.
+cheatsheet:
+	@uv run python scripts/cheatsheet.py $(filter-out $@,$(MAKECMDGOALS))
+
+%:
+	@:
 
 # --- Canary domains: nginx + DNS resolver + local CA (docker compose only) ---
 # See README.md "Custom domains for canaries" for the full picture and order
