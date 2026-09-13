@@ -44,6 +44,7 @@ export interface CanaryType {
 export interface CanaryInstance {
   id: string;
   canary_type_id: string;
+  name: string; // short (2-3 word) UI label, e.g. "Fake Answer Key"
   metadata: Record<string, unknown>;
   task_id: string;
   iom_ids: string[];

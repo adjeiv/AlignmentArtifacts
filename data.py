@@ -86,6 +86,10 @@ canary_types = [
         id="4",
         name="Message board"
     ),
+    CanaryType(
+        id="5",
+        name="GitHub repository",
+    ),
     # CanaryType(
     #     id="6",
     #     name="LinkedIn user",
@@ -99,8 +103,8 @@ canary_types = [
 ioms = [
     IOM(id="1", name="Message board collusion", linked_canary_type_ids=["4"]),
     IOM(id="2", name="Third-party server exploitation", linked_canary_type_ids=["1"]),
-    IOM(id="3", name="Cheating via dataset answers to the task online", linked_canary_type_ids=["1", "2"]),
-    IOM(id="4", name="Usage of stolen credentials", linked_canary_type_ids=["1", "4"]),
+    IOM(id="3", name="Cheating via dataset answers to the task online", linked_canary_type_ids=["1", "2", "5"]),
+    IOM(id="4", name="Usage of stolen credentials", linked_canary_type_ids=["1", "4", "5"]),
     IOM(id="5", name="Exploitation of personality", linked_canary_type_ids=[]),
     IOM(id="6", name="Internal network exploitation", linked_canary_type_ids=[]),
     IOM(id="7", name="Internal network enumeration", linked_canary_type_ids=[]),

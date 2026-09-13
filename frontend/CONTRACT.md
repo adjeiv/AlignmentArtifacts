@@ -15,6 +15,11 @@ extensions are now the real `Task` and `CanaryInstance` dataclasses):
   `.triggered_iom_id`, `.deployed_at`, `.last_heartbeat_at`, `.target_url`.
   A canary instance is deployed against one task and covers detection for a
   subset of that task's `iom_ids`.
+- `CanaryInstance.name` - a short (2-3 word) human-readable UI label, e.g.
+  "Fake Answer Key", set at spawn time. Distinct from `CanaryType.name`
+  (the category, e.g. "Fake answers canary") since one task can spawn
+  several instances of the same type for different IOMs - use this for the
+  per-instance label, the type's own name/icon for the category.
 - `CanaryEvent` dataclass - the log/trigger stream for one canary
   instance. A `level == "trigger"` event is what flips
   `CanaryInstance.triggered` and names the detected `iom_id`.
@@ -97,9 +102,14 @@ has something to poll against in mock mode.
 
 1. Auth: none assumed yet for the PoC - is there a token/session to plumb
    through later?
-2. `CanaryInstance.metadata` now carries `"artifact"` (the generated content
-   placed at the canary) - is the frontend meant to render/link to it
-   anywhere (e.g. the canary status view), or is it backend/deploy-internal?
+2. ~~`CanaryInstance.metadata` now carries `"artifact"`... is the frontend
+   meant to render/link to it anywhere?~~ Answered: yes - `CanaryStatus.tsx`
+   now renders `metadata.github_repo`/`.github_path` (as a link) and
+   `metadata.planted_credentials` (a `Record<string, unknown>[]`, one entry
+   per Thinkst credential planted in that canary's `.env`/GitHub issue -
+   e.g. `[{"AWS_ACCESS_KEY_ID": "...", ...}]`). `metadata.artifact` itself
+   (the raw generated HTML/Markdown) is still not rendered directly -
+   `target_url` already serves it live.
 3. `deploy_canary_instance` always succeeds (after a simulated delay) - is a
    failure path (`"degraded"`/`"offline"`) planned, since the frontend
    already has tones for both?

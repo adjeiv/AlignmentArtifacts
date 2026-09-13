@@ -55,6 +55,7 @@ function runPipeline(task: Task) {
         const instance: CanaryInstance = {
           id: `ci-${nextCanarySeq++}`,
           canary_type_id: canaryTypeId,
+          name: mockCanaryTypes.find((t) => t.id === canaryTypeId)?.name ?? canaryTypeId,
           task_id: task.id,
           iom_ids: [iom.id],
           metadata: {},

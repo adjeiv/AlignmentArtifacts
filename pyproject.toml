@@ -8,6 +8,8 @@ dependencies = [
     "dnslib>=0.9.26",
     "fastapi>=0.141.1",
     "pydantic>=2.13.5",
+    "python-dotenv>=1.2.3",
+    "requests>=2.34.2",
     "uvicorn[standard]>=0.52.4",
     "vite>=1.5.2",
 ]

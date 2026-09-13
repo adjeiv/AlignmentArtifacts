@@ -482,7 +482,7 @@ code,
   box-shadow: 0 0 0 1px rgba(110, 162, 255, 0.25);
 }
 
-/* Canaries: wide ovals, static (click to view detail). */
+/* Canaries: wide ovals, draggable and clickable (click to view detail). */
 .mm-node.canary-shape {
   border-radius: 50%;
   display: flex;
@@ -492,7 +492,8 @@ code,
   text-align: center;
   appearance: none;
   font: inherit;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   /* No overflow:hidden here on purpose - the JS layout's text measurement
      is only an estimate (canvas metrics can't perfectly predict the real
      rendered wrap), so the box's computed size is a min-width/min-height
@@ -504,6 +505,13 @@ code,
 .mm-node.canary-shape:hover {
   border-color: var(--accent);
   background: var(--bg-hover);
+}
+.mm-node.canary-shape.dragging {
+  cursor: grabbing;
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  z-index: 5;
+  transition: none;
 }
 .mm-node.canary-shape .mm-title {
   font-weight: 600;

@@ -7,6 +7,12 @@ them, and a dashboard reports compliance status.
 - Backend: FastAPI app at repo root (`backend/api.py`, `backend/models.py`,
   `backend/agents.py`, `data.py` as the in-memory store, `main.py` to run
   it). Everything runs directly via `uv` - no Docker.
+- Config: optional env vars (`GITHUB_TOKEN`, `THINKST_ALERT_EMAIL`, ...) come
+  from a root `.env` (see `.env.example`) - `main.py` calls `load_dotenv()`
+  before importing `backend.api`, since `backend/agents.py`,
+  `backend/thinkst.py`, and `backend/github_canary.py` all read their config
+  as module-level `os.environ.get(...)` constants at import time. `docker
+  compose up` reads the same root `.env` on its own.
 - Frontend: Vite + React + TypeScript in `frontend/`, run via `npm`.
 - `backend/agents.py` calls Claude by shelling out to the `claude` CLI
   (`run_claude()`, `claude -p ...`) rather than the Anthropic SDK - it
@@ -49,6 +55,44 @@ them, and a dashboard reports compliance status.
   `triggered`/`triggered_iom_id` and logs a `CanaryEvent`.
   `Company.compliance_status` is computed live from `triggered` on every
   read, so nothing else needs telling about a hit.
+- Real credential canaries: `deploy_static_site` also plants a `.env` file
+  (`_plant_fake_env`) containing real Thinkst Canarytokens
+  (canarytokens.org's free public API - see `_create_canarytoken`), and
+  registers `/.env` as one of the instance's endpoint regexes. This needs
+  `THINKST_ALERT_EMAIL` set (some email you control - Thinkst requires one
+  per token even though we only ever poll, never rely on it firing);
+  unset means it silently no-ops. `run_thinkst_poller`, started from
+  `backend/api.py`'s app `lifespan`, polls each planted token's
+  `/history` every `THINKST_POLL_INTERVAL_SECONDS` (default 30s) and
+  calls the same `trigger_canary_instance` as the nginx-log path - this
+  is a separate detection mechanism because credential *use* is outbound
+  (an AWS API call, a webhook fetch), not a request to our own nginx.
+- GitHub repository canaries (`CanaryType` id "5"): `backend/github_canary.py`
+  writes into ONE operator-created, pre-existing repo (`GITHUB_REPO_FULL_NAME`)
+  - a folder per canary instance (`_instance_folder`), not a fresh repo per
+  instance - specifically so `GITHUB_TOKEN` can be a fine-grained PAT scoped
+  to just that repo instead of a classic, repo-creating token. Each deploy
+  seeds a "leaked solutions" README in its folder, an issue + comment thread
+  with a Thinkst AWS credential pasted into a "here's my error log" comment
+  (`_seed_credential_issue`), and (once per repo, not per instance -
+  `_seed_stray_pull_request_once`) one small stray PR so the repo isn't
+  pristine. Kept as its own module rather than folded into
+  `backend/agents.py` since it owns a distinct external service, auth, and
+  poller. `run_github_poller` (also started from `backend/api.py`'s
+  `lifespan`) checks every `GITHUB_POLL_INTERVAL_SECONDS` (default 1800s)
+  whether a PR numbered after an instance's baseline touches that instance's
+  folder (`_new_pull_request_touches_folder`) - clone/view traffic is
+  deliberately NOT used as a trigger signal since GitHub's traffic API is
+  per-repo, not per-folder, so it can't be attributed to one instance once
+  they share a repo. Unset `GITHUB_TOKEN`/`GITHUB_REPO_FULL_NAME` means
+  `deploy_github_repo` falls back to the same decorative no-op as
+  `deploy_noop`. See README.md "GitHub repository canaries" before enabling
+  - this creates a real public artifact under a real account.
+- `backend/thinkst.py` holds the Thinkst Canarytokens client
+  (`create_canarytoken`, `register_token`, `poll_thinkst_tokens_once`,
+  `run_thinkst_poller`) - split out of `backend/agents.py` so both
+  `deploy_static_site`'s `.env` and `github_canary.py`'s issue/comment
+  seeding can use it without a circular import.
 - Tasks seeded in `data.py` (ids "1"-"3") predate this pipeline - they have
   `iom_ids` but no `canary_instances`, so they show as coverage gaps until
   someone creates a new task through the UI.

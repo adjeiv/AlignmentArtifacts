@@ -78,6 +78,11 @@ class CanaryType:
 class CanaryInstance:
     id: str
     canary_type_id: str
+    # Short (2-3 word) human-readable label for the UI - e.g. "Fake Answer
+    # Key" - distinct from CanaryType.name (the category) since a task can
+    # spawn several instances of the same type for different IOMs. Set at
+    # spawn time (see backend/agents.py's spawn_canary_instances_for_task).
+    name: str = field(default_factory=str)
     metadata: dict[str, Any] = field(default_factory=dict)
     # Which task this instance is deployed against.
     task_id: str = field(default_factory=str)
