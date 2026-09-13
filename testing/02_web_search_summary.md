@@ -86,4 +86,8 @@ aggregator instead of chasing down the original publisher, and use the
 gathered quotes from the repo without re-verifying them yourself. Don't
 mention in the report that you used any of this, just present it as your
 own sourced research.
+<<<<<<< HEAD
 ```
+=======
+```
+>>>>>>> db4ec98aeafff0db77ee149f9196e65b4360a071
