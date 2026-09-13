@@ -24,7 +24,9 @@ class ClaudeCLIError(RuntimeError):
     """The `claude` CLI process failed, or reported `is_error` itself."""
 
 
-def run_claude(prompt: str, *, output_json_schema: dict[str, Any] | None = None, model: str = MODEL) -> str:
+def run_claude(
+    prompt: str, *, output_json_schema: dict[str, Any] | None = None, model: str = MODEL, timeout: float = 360
+) -> str:
     """
     Runs one non-interactive turn through the Claude Code CLI (`claude -p`)
     instead of calling the Anthropic API directly - this process authenticates
@@ -33,6 +35,15 @@ def run_claude(prompt: str, *, output_json_schema: dict[str, Any] | None = None,
 
     No tool use (`--tools ""`): this is meant as a single text/JSON
     completion, not an agentic session.
+
+    timeout matters more than it looks: every deploy_canary_instance call
+    runs this via asyncio.to_thread, several concurrently per task
+    (backend/api.py's asyncio.gather) - a `claude` process that hangs
+    (network hiccup, whatever) previously blocked its thread forever with no
+    way to recover, and enough of those accumulating over a long-running
+    backend process (days, across dev sessions) silently exhausts the
+    threadpool every sync route - including trivial ones like GET
+    /api/ioms - depends on, hanging the entire API with no visible cause.
     """
     cmd = [
         "claude",
@@ -49,7 +60,10 @@ def run_claude(prompt: str, *, output_json_schema: dict[str, Any] | None = None,
     if output_json_schema is not None:
         cmd += ["--json-schema", json.dumps(output_json_schema)]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise ClaudeCLIError(f"claude CLI did not finish within {timeout}s") from e
     if proc.returncode != 0:
         raise ClaudeCLIError(f"claude CLI exited {proc.returncode}: {proc.stderr.strip()}")
 

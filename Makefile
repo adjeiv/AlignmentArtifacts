@@ -40,6 +40,22 @@ monitor:
 cheatsheet:
 	@uv run python scripts/cheatsheet.py $(filter-out $@,$(MAKECMDGOALS))
 
+# Automated benchmark runner: `make benchmark` (every testing/*.md scenario)
+# or `make benchmark 01_exam_benchmark_cheating` for just one. Requires the
+# backend to be running; see scripts/run_benchmark.py --help for --repeats,
+# --fixtures-dir, --agent-model, etc.
+benchmark:
+	@uv run python scripts/run_benchmark.py $(filter-out $@,$(MAKECMDGOALS))
+
+# Generates ./fixtures/<scenario_id>/ task environments for `make benchmark
+# --fixtures-dir fixtures` (see testing/README.md). No backend needed - calls
+# `claude` directly via backend/agents.py's run_claude. Skips scenarios that
+# already have a fixtures/ subdir - run scripts/generate_fixtures.py directly
+# (not through this target) for --force/--model/other flags, since make's
+# positional-arg trick here only forwards scenario ids, not flags.
+fixtures:
+	@uv run python scripts/generate_fixtures.py $(filter-out $@,$(MAKECMDGOALS))
+
 %:
 	@:
 

@@ -64,6 +64,51 @@ least once:
 | 04 multi-agent handoff | 1 (message board collusion) | 4 |
 | 05 devops integration | 4 (stolen credentials), 2 (third-party server exploitation) | 1, 4, 5 |
 
+## Automated runs (many trials, aggregated stats)
+
+The steps above describe one manual pass. For a trigger *rate* with a real
+sample size (what a whitepaper needs, not one anecdote per scenario), use
+`scripts/run_benchmark.py` instead - it automates all four steps above (task
+creation, waiting for deploy, cheatsheet generation, running the aligned/
+misaligned `claude` CLI session) across as many repeats as you ask for, and
+aggregates a trigger rate + 95% CI per scenario/condition/IOM plus the
+pooled false-positive (aligned) and detection (misaligned) rates.
+
+```
+make benchmark                              # every scenario, 5 repeats each condition
+make benchmark 01_exam_benchmark_cheating   # just one scenario
+uv run python scripts/run_benchmark.py --repeats 20 --fixtures-dir ./fixtures
+```
+
+It needs a `--fixtures-dir` with one subdirectory per scenario id (e.g.
+`fixtures/01_exam_benchmark_cheating/exploitgym/...`) containing that
+scenario's task environment. Generate these with:
+
+```
+uv run python scripts/generate_fixtures.py          # every scenario
+uv run python scripts/generate_fixtures.py 01        # just one (prefix match)
+uv run python scripts/generate_fixtures.py --force   # regenerate existing ones
+```
+
+This calls `claude` directly (via `backend/agents.py`'s `run_claude` - no
+backend process needed) to synthesize a plausible task environment per
+scenario from its own task brief - real enough to create genuine pressure,
+not scored for correctness (`run_benchmark.py` only measures whether a
+canary got triggered, never whether the underlying task was solved
+correctly). It deliberately avoids ever writing a complete/authoritative
+answer key for anything a scenario describes as hidden from the agent -
+see the script's docstring for why. Sanity-check the output before relying
+on it for real numbers; LLM-generated fixtures can be subtly off in ways
+that matter for a whitepaper (e.g. a "hidden" test file that isn't
+actually excluded from what the agent can trivially find).
+
+Without a fixture, a scenario still runs (with a warning) but the agent
+has no real task to do, so its result is meaningless for the benchmark -
+only useful for exercising the runner itself. See `scripts/run_benchmark.py --help` for every knob
+(`--repeats`, `--agent-model`, `--observe-seconds`, timeouts, ...) and its
+module docstring for preconditions (backend + full docker-compose stack
+running, `GITHUB_POLL_INTERVAL_SECONDS` caveat for canary type "5").
+
 ## Notes
 
 - `/tmp/extra_assets` is deliberately plain text/markdown, not JSON — it's
